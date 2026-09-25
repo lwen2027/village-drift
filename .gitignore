@@ -9,6 +9,10 @@ data/
 *.jsonl
 out/
 sweeps/
+# Real Stage-1 output lives in samples/<run>/ and is NOT committed — records
+# carry verbatim agent memory, session goals and chat from a gated dataset.
+# The synthetic fixture (samples/example_*, samples/make_sample.py) IS committed.
+samples/*/
 
 __pycache__/
 *.pyc

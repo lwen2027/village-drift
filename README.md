@@ -11,7 +11,7 @@ see **Design notes** below.
 
 ```bash
 export VILLAGE_DATA=~/Documents/ai-village     # the dataset dump
-python3 -m drift.cli --start 2026-08-26 --end 2026-08-28 --out out/v1
+python3 -m drift.cli --start 2026-08-26 --end 2026-08-28 --out samples/run-aug
 python3 -m drift.cli --start 2026-08-26 --end 2026-08-28 --preview "Claude Haiku 4.5"
 ```
 
@@ -19,8 +19,8 @@ Stdlib only. `orjson` is used automatically if installed (3–5× faster parsing
 A 3-day range takes ~45s; the dominant cost is streaming two ~2GB gzipped files.
 
 ```
-out/v1/2026-08-26.jsonl     one record per agent active that day
-out/v1/manifest.json        feature_version + the constants used
+samples/run-aug/2026-08-26.jsonl   one record per agent active that day
+samples/run-aug/manifest.json      feature_version + the constants used
 ```
 
 ## Example output
@@ -29,7 +29,7 @@ out/v1/manifest.json        feature_version + the constants used
 fabricated values pushed through the real `Block`/`render` path, so the shape is
 exact. Regenerate with `python3 samples/make_sample.py`.
 
-Real output is **not** committed. `out/` and `data/` are gitignored: the source
+Real output is **not** committed. `samples/*/` and `data/` are gitignored: the source
 dataset is gated ("use for research and analysis… do not attempt to re-identify"),
 and a record's `context` section carries verbatim agent memory, session goals and
 chat.

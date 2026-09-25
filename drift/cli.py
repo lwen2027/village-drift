@@ -10,7 +10,8 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Stage 1 feature extraction")
     p.add_argument("--start", help="YYYY-MM-DD inclusive")
     p.add_argument("--end", help="YYYY-MM-DD inclusive")
-    p.add_argument("--out", default="out/stage1")
+    p.add_argument("--out", default="samples/run",
+                   help="real output; samples/<run>/ is gitignored")
     p.add_argument("--preview", metavar="AGENT",
                    help="render one agent's block to stdout instead of writing")
     a = p.parse_args()
