@@ -1,0 +1,16 @@
+# NEVER commit credentials — DATABASE_URI is read from the environment only
+.env
+.env.*
+*.pem
+
+# Data (the HF dump is gated; don't redistribute)
+data/
+*.jsonl.gz
+*.jsonl
+out/
+sweeps/
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
