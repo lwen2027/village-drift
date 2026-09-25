@@ -129,6 +129,11 @@ def load_turns(sessions_by_id: dict, start=None, end=None) -> dict[tuple, list[d
     """
     (agent_id, day) -> [turn, ...] sorted by created_at.
 
+    `day` is the day the TURN happened, not the day its session opened.
+    Sessions cross midnight: keying by session day silently moves work onto
+    the wrong date (observed on real data — GPT-5 had 13 bash turns from a
+    23:58 session counted on the previous day).
+
     Only fields Stage 1 needs are retained; the raw provider blob is dropped
     after extraction to keep memory bounded.
     """
@@ -137,7 +142,8 @@ def load_turns(sessions_by_id: dict, start=None, end=None) -> dict[tuple, list[d
         meta = sessions_by_id.get(r.get("session_id"))
         if not meta:
             continue
-        aid, day, _, _ = meta
+        aid = meta[0]
+        day = day_of(r.get("created_at"))  # turn's own day, NOT the session's
         action = r.get("agent_action") or {}
         if not isinstance(action, dict):
             action = {}

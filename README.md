@@ -88,6 +88,24 @@ over *named* items, which survive 36–97%.
 format. Replaced by `assigned_goal_words_present` — bag-of-words containment, needing
 no extraction — with goal *restatement* moved to the judge.
 
+### Validated against independently-parsed ground truth
+
+A separate parser reads the dump directly (no `drift/` imports) and recomputes
+9 fields per agent-day. On 2026-08-26..28, 82 records: **all 9 fields match on
+every record**. That pass found two real defects that unit tests on pure
+functions could not have caught — both about *which rows land on which day*:
+
+* **Cross-midnight turns.** Turns were keyed by the day their SESSION opened.
+  A session starting 23:58 put its post-midnight work on the previous date —
+  GPT-5 had 13 bash turns on the wrong day. Turns are now keyed by the day the
+  turn happened, and an agent-day exists if there was a session **or** a turn.
+* **`command=""` counted as bash.** The filter used `is not None`, so
+  empty-string commands became work. Over-counted GPT-5 by 5 turns/day.
+
+`tests/test_structure.py` pins both, plus date-range handling, lookback,
+cross-agent isolation, goal fallback, and that the byte-prefilter cannot change
+results.
+
 ### Performance traps hit while building this
 
 Recorded because each cost a debugging cycle and each is easy to reintroduce.

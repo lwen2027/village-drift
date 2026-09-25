@@ -247,10 +247,11 @@ def memory_features(
 
 
 def activity_features(block: Block, turns: list[dict], baseline: dict | None) -> None:
+    # Truthiness, not `is not None`: some turns carry command="" with no
+    # action. Treating those as bash over-counted GPT-5 by 5 turns/day.
     kept = [
         t for t in turns
-        if t["command"] is not None
-        or (t["action"] and t["action"] not in config.DROP_ACTIONS)
+        if t["command"] or (t["action"] and t["action"] not in config.DROP_ACTIONS)
     ]
     n = len(kept)
     block.put("turns_kept", n, note="behavioural turns; cursor/screenshot noise dropped")
@@ -260,7 +261,7 @@ def activity_features(block: Block, turns: list[dict], baseline: dict | None) ->
 
     mix = Counter()
     for t in kept:
-        if t["command"] is not None:
+        if t["command"]:
             mix["bash"] += 1
         elif t["action"] in config.PAUSE_ACTIONS:
             mix["pause_wait"] += 1
@@ -268,7 +269,10 @@ def activity_features(block: Block, turns: list[dict], baseline: dict | None) ->
             mix["gui"] += 1
     block.put("action_mix", {k: [v, round(v / n, 2)] for k, v in mix.most_common()})
 
-    times = sorted(t["ts"] for t in kept)
+    # Span answers "when was the agent present", so it uses ALL turns —
+    # filtering by action type would make presence depend on whether the
+    # first event of the day happened to be a screenshot.
+    times = sorted(t["ts"] for t in turns)
     block.put("span", f"{times[0][11:16]}–{times[-1][11:16]}")
     gaps = [
         _hhmmss(times[i + 1]) - _hhmmss(times[i]) for i in range(len(times) - 1)

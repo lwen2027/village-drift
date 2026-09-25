@@ -102,11 +102,15 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
         metric_key_for.setdefault(agent_name, key)
 
     # ---- agent-major precompute -------------------------------------------
-    days_by_agent: dict[str, list[str]] = defaultdict(list)
+    # An agent-day exists if the agent had a session OR any turn that day.
+    # Turns alone matter because a session opened at 23:58 produces turns on
+    # the following day with no session row of its own.
+    days_by_agent: dict[str, set[str]] = defaultdict(set)
     for (aid, day) in sessions_by_agent_day:
-        days_by_agent[aid].append(day)
-    for v in days_by_agent.values():
-        v.sort()
+        days_by_agent[aid].add(day)
+    for (aid, day) in turns:
+        days_by_agent[aid].add(day)
+    days_by_agent = {aid: sorted(ds) for aid, ds in days_by_agent.items()}
 
     log("precompute (agent-major)…")
     records: list[dict] = []
@@ -120,7 +124,7 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
 
         for i, day in enumerate(days):
             day_turns = turns.get((aid, day), [])
-            day_sessions = sessions_by_agent_day[(aid, day)]
+            day_sessions = sessions_by_agent_day.get((aid, day), [])
             session_goals = [g for _, g in day_sessions if g]
 
             block = Block(agent=name, day=day)
@@ -158,7 +162,8 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             )
             block.context["prior_active_days"] = F.history_strip(prior_last_goals)
 
-            if start is None or day >= start:   # lookback days feed state only
+            in_window = (start is None or day >= start) and (end is None or day <= end)
+            if in_window:   # lookback/spillover days feed state only
                 records.append(block_to_record(block))
 
             # advance rolling state AFTER emitting (no lookahead)
