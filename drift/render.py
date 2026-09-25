@@ -32,6 +32,8 @@ SECTIONS = [
                    "most_touched"]),
     ("REPETITION", ["largest_bash_group", "session_goal_repetition"]),
     ("INTERACTION", ["chat_sent", "agents_named_in_session_goals"]),
+    ("NULL KINDS (example fixture only)", ["example_null_absent",
+     "example_null_extract_failed", "example_null_edge"]),
 ]
 
 

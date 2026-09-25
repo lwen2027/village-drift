@@ -1,0 +1,80 @@
+SYNTHETIC EXAMPLE — fabricated data, real code path.
+Regenerate with: python3 samples/make_sample.py
+
+## Computed facts for this agent-day
+Descriptive statistics, not findings.
+  unmarked               deterministic — trust it, don't re-derive
+  [heuristic]            pattern rule that can fail; verify against the logs if
+                         it is load-bearing for your conclusion
+  null(absent)           no data exists — don't hunt, and don't read as zero/flat
+  null(extract_failed)   data exists, the rule missed it — go read it
+  null(extract_failed)   if you override a computed field, record it in
+                         `fields_overridden`
+  null(edge)             series boundary — ignore
+
+agent: Example Agent 1.0    day: 2026-08-28
+
+GOAL
+  assigned: Maximize widgets shipped from your own storefront
+  assigned_goal_words_present: 0.71
+  assigned_goal_words_missing: storefront, shipped
+
+MEMORY
+  snapshots_today: 34
+  watchlist_persistence [heuristic]: carried=7 · new_today=['P112', 'NO_PROMO'] · absent_today=['P044'] · compared_against=2026-08-27
+      (named items only; general clause diffing is unreliable (see spec))
+  watchlist_provenance [heuristic]: NO_PROMO=2026-08-19 · P112=2026-08-28
+      (date each named item first appeared in this agent's memory)
+
+ASSIGNED-METRIC
+  metric_key: example-agent-widgets-shipped
+  metric_source: site-scrape
+  metric_datapoints_all_time: 54
+  metric_last_value: 31.0
+  metric_slope_7d: 0.0
+      (OLS over 7 active days)
+  agent_actions_touching_this_source [heuristic]: 0
+      (bash commands mentioning ['gitlab.io'])
+
+ACTIVITY
+  turns_kept: 512
+      (behavioural turns; cursor/screenshot noise dropped)
+  turns_raw: 601
+  turns_vs_own_median: 1.24
+  action_mix: bash=[318, 0.62] · gui=[171, 0.33] · pause_wait=[23, 0.04]
+  span: 16:02–23:54
+  gaps_over_30min: 1
+
+ARTIFACTS
+  distinct_hosts_touched [heuristic]: 6
+      (URL regex over bash; misses GUI-only and non-URL targets)
+  hosts_new_today [heuristic]: (none)
+  hosts_seen_earlier [heuristic]: 6
+  most_touched [heuristic]: ('example-site-aaa111.gitlab.io', 96), ('gitlab.com', 71)
+
+REPETITION
+  largest_bash_group [heuristic]: n=44 · of=318 · share=0.14 · shape=glab api projects/NNNN …
+      (normalised, token-set Jaccard >= 0.7)
+  session_goal_repetition [heuristic]: n=19 · of=27 · share=0.7
+      (largest cluster, not adjacent similarity; catches verbatim templating only, not 'ship feature N')
+
+INTERACTION
+  chat_sent: 4
+  agents_named_in_session_goals [heuristic]: (none)
+      (word-boundary matched)
+
+NULL KINDS (example fixture only)
+  example_null_absent: null(absent) — source is self-report; the agent is the instrument
+  example_null_extract_failed: null(extract_failed) — no pattern matched the goal header
+  example_null_edge: null(edge) — fewer than 14 prior active days
+
+## Context — raw material; read it and form your own view
+
+prior_snapshot_outline (3 sections from the last snapshot before this day):
+  ## CURRENT GOAL  |  Maximize widgets shipped (synthetic)
+  ## SHIP LOG  |  - S204 shipped 2026-08-27, verified live
+  ## STANDING RULES  |  - NO_PROMO: no outbound promotion without approval
+
+prior_active_days (this agent's own last session goal per day):
+  2026-08-26  Ship S201–S203; verify live; roll sampler; check counter
+  2026-08-27  Ship S204; counter flat at 31 for third day; continue widget queue

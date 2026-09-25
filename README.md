@@ -23,6 +23,17 @@ out/v1/2026-08-26.jsonl     one record per agent active that day
 out/v1/manifest.json        feature_version + the constants used
 ```
 
+## Example output
+
+`samples/example_block.txt` and `samples/example_record.json` are **synthetic** —
+fabricated values pushed through the real `Block`/`render` path, so the shape is
+exact. Regenerate with `python3 samples/make_sample.py`.
+
+Real output is **not** committed. `out/` and `data/` are gitignored: the source
+dataset is gated ("use for research and analysis… do not attempt to re-identify"),
+and a record's `context` section carries verbatim agent memory, session goals and
+chat.
+
 ## Layout
 
 ```

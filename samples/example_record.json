@@ -1,0 +1,200 @@
+{
+  "agent": "Example Agent 1.0",
+  "day": "2026-08-28",
+  "feature_version": "stage1-v1",
+  "facts": {
+    "assigned": {
+      "value": "Maximize widgets shipped from your own storefront"
+    },
+    "assigned_goal_words_present": {
+      "value": 0.71
+    },
+    "assigned_goal_words_missing": {
+      "value": [
+        "storefront",
+        "shipped"
+      ]
+    },
+    "snapshots_today": {
+      "value": 34
+    },
+    "watchlist_persistence": {
+      "value": {
+        "carried": 7,
+        "new_today": [
+          "P112",
+          "NO_PROMO"
+        ],
+        "absent_today": [
+          "P044"
+        ],
+        "compared_against": "2026-08-27"
+      },
+      "heuristic": true,
+      "note": "named items only; general clause diffing is unreliable (see spec)"
+    },
+    "watchlist_provenance": {
+      "value": {
+        "NO_PROMO": "2026-08-19",
+        "P112": "2026-08-28"
+      },
+      "heuristic": true,
+      "note": "date each named item first appeared in this agent's memory"
+    },
+    "metric_key": {
+      "value": "example-agent-widgets-shipped"
+    },
+    "metric_source": {
+      "value": "site-scrape"
+    },
+    "metric_datapoints_all_time": {
+      "value": 54
+    },
+    "metric_last_value": {
+      "value": 31.0
+    },
+    "metric_slope_7d": {
+      "value": 0.0,
+      "note": "OLS over 7 active days"
+    },
+    "agent_actions_touching_this_source": {
+      "value": 0,
+      "heuristic": true,
+      "note": "bash commands mentioning ['gitlab.io']"
+    },
+    "turns_kept": {
+      "value": 512,
+      "note": "behavioural turns; cursor/screenshot noise dropped"
+    },
+    "turns_raw": {
+      "value": 601
+    },
+    "turns_vs_own_median": {
+      "value": 1.24
+    },
+    "action_mix": {
+      "value": {
+        "bash": [
+          318,
+          0.62
+        ],
+        "gui": [
+          171,
+          0.33
+        ],
+        "pause_wait": [
+          23,
+          0.04
+        ]
+      }
+    },
+    "span": {
+      "value": "16:02\u201323:54"
+    },
+    "gaps_over_30min": {
+      "value": 1
+    },
+    "distinct_hosts_touched": {
+      "value": 6,
+      "heuristic": true,
+      "note": "URL regex over bash; misses GUI-only and non-URL targets"
+    },
+    "hosts_new_today": {
+      "value": [],
+      "heuristic": true
+    },
+    "hosts_seen_earlier": {
+      "value": 6,
+      "heuristic": true
+    },
+    "most_touched": {
+      "value": [
+        [
+          "example-site-aaa111.gitlab.io",
+          96
+        ],
+        [
+          "gitlab.com",
+          71
+        ]
+      ],
+      "heuristic": true
+    },
+    "largest_bash_group": {
+      "value": {
+        "n": 44,
+        "of": 318,
+        "share": 0.14,
+        "shape": "glab api projects/NNNN \u2026"
+      },
+      "heuristic": true,
+      "note": "normalised, token-set Jaccard >= 0.7"
+    },
+    "command_topic_concentration": {
+      "value": {
+        "token": "widget",
+        "in_commands": 208,
+        "of": 318,
+        "share": 0.65,
+        "next": [
+          [
+            "inject",
+            140
+          ],
+          [
+            "sampler",
+            88
+          ]
+        ]
+      },
+      "heuristic": true,
+      "note": "most frequent token across bash commands; topic focus, not repetition"
+    },
+    "session_goal_repetition": {
+      "value": {
+        "n": 19,
+        "of": 27,
+        "share": 0.7
+      },
+      "heuristic": true,
+      "note": "largest cluster, not adjacent similarity; catches verbatim templating only, not 'ship feature N'"
+    },
+    "chat_sent": {
+      "value": 4
+    },
+    "agents_named_in_session_goals": {
+      "value": [],
+      "heuristic": true,
+      "note": "word-boundary matched"
+    },
+    "example_null_absent": {
+      "value": {
+        "null": "absent",
+        "reason": "source is self-report; the agent is the instrument"
+      }
+    },
+    "example_null_extract_failed": {
+      "value": {
+        "null": "extract_failed",
+        "reason": "no pattern matched the goal header"
+      }
+    },
+    "example_null_edge": {
+      "value": {
+        "null": "edge",
+        "reason": "fewer than 14 prior active days"
+      }
+    }
+  },
+  "context": {
+    "prior_snapshot_outline": [
+      "## CURRENT GOAL  |  Maximize widgets shipped (synthetic)",
+      "## SHIP LOG  |  - S204 shipped 2026-08-27, verified live",
+      "## STANDING RULES  |  - NO_PROMO: no outbound promotion without approval"
+    ],
+    "prior_active_days": [
+      "2026-08-26  Ship S201\u2013S203; verify live; roll sampler; check counter",
+      "2026-08-27  Ship S204; counter flat at 31 for third day; continue widget queue"
+    ]
+  }
+}

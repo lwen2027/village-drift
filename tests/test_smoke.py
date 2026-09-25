@@ -38,3 +38,20 @@ def test_null_is_not_zero():
     F.repetition_features(blk, [], ["one", "two"])
     v = blk.facts["session_goal_repetition"].value
     assert isinstance(v, F.Null) and v.kind == "edge"
+
+
+def test_sample_fixture_round_trips():
+    """The committed sample must stay in sync with the render path."""
+    import json, os, subprocess, sys
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    subprocess.run([sys.executable, "samples/make_sample.py"], cwd=here,
+                   check=True, capture_output=True)
+    rec = json.load(open(os.path.join(here, "samples/example_record.json")))
+    assert rec["agent"] == "Example Agent 1.0"
+    # every null kind is exercised by the fixture
+    kinds = {v["value"]["null"] for v in rec["facts"].values()
+             if isinstance(v["value"], dict) and "null" in v["value"]}
+    assert kinds == {"absent", "extract_failed", "edge"}, kinds
+    # heuristic marking survives serialisation
+    assert rec["facts"]["watchlist_persistence"]["heuristic"] is True
+    assert "heuristic" not in rec["facts"]["turns_kept"]
