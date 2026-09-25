@@ -34,6 +34,11 @@ BASELINE_DAYS = 14
 HISTORY_STRIP_DAYS = 14
 HISTORY_GOAL_CHARS = 200
 METRIC_SLOPE_DAYS = 7
+# Calendar days loaded BEFORE the requested start, so day 1 of a partial run
+# still has a baseline and a history strip. Without it the first ~14 days of
+# any windowed run silently degrade: empty context, null baselines. Generous
+# because the windows count ACTIVE days and agents skip weekends/go dormant.
+LOOKBACK_DAYS = 45
 
 # --- repetition --------------------------------------------------------------
 # Largest near-identical cluster, NOT adjacent- or all-pairs similarity:

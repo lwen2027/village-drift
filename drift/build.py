@@ -16,6 +16,7 @@ import json
 import os
 import statistics
 from collections import defaultdict
+from datetime import date, timedelta
 
 from . import config, features as F, load
 from .features import Block, Field, Null
@@ -66,23 +67,32 @@ def _assigned_goal(agent_id, day, agent_goals, village_goals) -> str | None:
 def build(start: str | None = None, end: str | None = None, verbose=True) -> list[dict]:
     log = print if verbose else (lambda *a, **k: None)
 
+    # Load a lookback buffer so day 1 of a partial run has history; emit only
+    # the requested range.
+    load_start = start
+    if start:
+        load_start = (
+            date.fromisoformat(start) - timedelta(days=config.LOOKBACK_DAYS)
+        ).isoformat()
+        log(f"lookback: loading from {load_start} (emitting from {start})")
+
     log("loading agents/goals…")
     agents = load.load_agents()
     agent_goals, village_goals = load.load_goals()
     short_names = F.build_short_names(sorted(agents.values()))
 
     log("loading sessions…")
-    sessions_by_id, sessions_by_agent_day = load.load_sessions(start, end)
+    sessions_by_id, sessions_by_agent_day = load.load_sessions(load_start, end)
     log(f"  {len(sessions_by_id):,} sessions, {len(sessions_by_agent_day):,} agent-days")
 
     log("loading turns (large)…")
-    turns = load.load_turns(sessions_by_id, start, end)
+    turns = load.load_turns(sessions_by_id, load_start, end)
 
     log("loading memory (large)…")
-    memory = load.load_memory_snapshots(start, end)
+    memory = load.load_memory_snapshots(load_start, end)
 
     log("loading chat…")
-    chat = load.load_chat(start, end)
+    chat = load.load_chat(load_start, end)
 
     # ---- agent-major precompute -------------------------------------------
     days_by_agent: dict[str, list[str]] = defaultdict(list)
@@ -137,7 +147,8 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             )
             block.context["prior_active_days"] = F.history_strip(prior_last_goals)
 
-            records.append(block_to_record(block))
+            if start is None or day >= start:   # lookback days feed state only
+                records.append(block_to_record(block))
 
             # advance rolling state AFTER emitting (no lookahead)
             for t in day_turns:
