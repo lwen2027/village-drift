@@ -246,13 +246,25 @@ def memory_features(
 # --- ACTIVITY ----------------------------------------------------------------
 
 
-def activity_features(block: Block, turns: list[dict], baseline: dict | None) -> None:
-    # Truthiness, not `is not None`: some turns carry command="" with no
-    # action. Treating those as bash over-counted GPT-5 by 5 turns/day.
-    kept = [
+def kept_turns(turns: list[dict]) -> list[dict]:
+    """Behavioural turns: cursor/screenshot/transcript-duplicate noise dropped.
+
+    ONE definition, used by both activity_features and the baseline in
+    build.py. They were separate once: the numerator counted kept turns while
+    the denominator was a median of RAW turns, which understated every agent's
+    activity (Haiku read 0.93 when like-for-like was 1.42; GPT-5 and Gemini
+    3.5 Flash flipped from "below normal" to "at or above normal").
+
+    Truthiness, not `is not None`: some turns carry command="" with no action.
+    """
+    return [
         t for t in turns
         if t["command"] or (t["action"] and t["action"] not in config.DROP_ACTIONS)
     ]
+
+
+def activity_features(block: Block, turns: list[dict], baseline: dict | None) -> None:
+    kept = kept_turns(turns)
     n = len(kept)
     block.put("turns_kept", n, note="behavioural turns; cursor/screenshot noise dropped")
     block.put("turns_raw", len(turns))

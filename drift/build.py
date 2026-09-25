@@ -143,7 +143,8 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             prior = days[max(0, i - config.BASELINE_DAYS) : i]
             baseline = None
             if len(prior) >= config.BASELINE_DAYS:
-                counts = [len(turns.get((aid, d), [])) for d in prior]
+                # Same predicate as the numerator — see features.kept_turns
+                counts = [len(F.kept_turns(turns.get((aid, d), []))) for d in prior]
                 baseline = {"turns": statistics.median(counts) or None}
 
             mkey = metric_key_for.get(name)

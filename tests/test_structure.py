@@ -201,3 +201,23 @@ def test_span_uses_all_turns_not_just_kept():
     b = Block("A", "2026-08-11")
     activity_features(b, turns, None)
     assert b.facts["span"].value == "00:00–23:59", b.facts["span"].value
+
+
+def test_baseline_compares_like_for_like():
+    """Numerator and denominator must both be KEPT turns.
+
+    Mixing them (kept / median-of-raw) understated every agent's activity:
+    Haiku reported 0.93 where like-for-like was 1.42, and two agents flipped
+    from "below normal" to "above normal".
+    """
+    from drift.features import Block, activity_features, kept_turns
+    noisy = ([{"ts": f"2026-08-11 10:{i:02d}:00", "command": "echo x", "action": None}
+              for i in range(10)]
+             + [{"ts": f"2026-08-11 11:{i:02d}:00", "command": None, "action": "screenshot"}
+                for i in range(90)])
+    assert len(kept_turns(noisy)) == 10, "screenshots are not behavioural turns"
+    b = Block("A", "2026-08-11")
+    activity_features(b, noisy, {"turns": 10})   # baseline already in KEPT units
+    assert b.facts["turns_vs_own_median"].value == 1.0, \
+        "10 kept today vs a 10-kept baseline is a normal day"
+    assert b.facts["turns_raw"].value == 100

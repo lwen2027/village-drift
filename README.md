@@ -1,153 +1,186 @@
-# village-drift — Stage 1
+# village-drift
 
-Mechanical feature extraction over the AI Village dataset, for goal-drift analysis.
+Tooling for a one-time audit of **goal drift** in the [AI Village](https://theaidigest.org/village)
+— 42 long-running LLM agents, 15 months, ~4,100 agent-days of computer use, chat
+and memory.
 
-Produces one record per **agent-day**: deterministic statistics plus raw context,
-which a Stage-2 LLM judge reads alongside the day's transcript. Stage 1 answers
-*"did this day diverge, and by how much"*. It deliberately does not attempt *"why"* —
-see **Design notes** below.
+## What this is for
 
-## Quick start
+The village already runs an LLM monitor that flags `off-goal` days. Hand-reading
+24 of its findings showed the monitor is good at *"this day is worth looking at"*
+and unreliable at *"here is what was wrong with it"* — it has no proportionality
+test, no memory access, and a single-day window, so it misidentifies which
+behaviour diverged and misses multi-day states entirely.
+
+This project runs a **separate, one-shot audit** with a different goal: not to
+re-detect known categories, but to **discover the mechanisms** by which agents end
+up working on something other than what they were assigned.
+
+Two design choices follow from that, and everything else follows from them.
+
+**Discovery, not classification.** The detector does not pick from a fixed label
+set. It emits free text describing what the agent did and what appears to have
+caused it; the taxonomy is derived afterwards by clustering those descriptions.
+Handing a model seven labels guarantees it finds seven things.
+
+**Mechanical where possible, judged where necessary.** Facts that can be counted
+or diffed are computed deterministically in code and injected into the prompt;
+only genuinely semantic questions go to the model — and the model is never asked
+to count, diff or divide.
+
+## Pipeline
+
+```
+STAGE 1  (this repo)     all agent-days · mechanical features + capped logs
+                         -> did this day diverge, and by how much
+STAGE 2  (not yet built) flagged days only · reasoning around the moments
+                         Stage 1 points at  -> why
+```
+
+Stage 1 deliberately excludes agent reasoning. Not for cost — for bias. Reasoning
+availability ranges 28–98% by agent, so a reasoning-fed detector would flag agents
+in proportion to how much reasoning their provider records. Keeping *detection* on
+channels that exist uniformly (actions, timestamps, memory, chat) means Stage 2
+inherits an unbiased candidate set.
+
+## Install and run
+
+Python 3.9+, standard library only. `orjson` is used automatically if present.
 
 ```bash
-export VILLAGE_DATA=~/Documents/ai-village     # the dataset dump
+export VILLAGE_DATA=~/Documents/ai-village          # the dataset dump
+
+# all agent-days in a range -> samples/<N>-agent-days-<start>..<end>/
 python3 -m drift.cli --start 2026-08-26 --end 2026-08-28
+
+# inspect one agent's block instead of writing
 python3 -m drift.cli --start 2026-08-26 --end 2026-08-28 --preview "Claude Haiku 4.5"
 ```
 
-Stdlib only. `orjson` is used automatically if installed (3–5× faster parsing).
-A 3-day range takes ~45s; the dominant cost is streaming two ~2GB gzipped files.
+A 3-day range takes ~45s; the cost is streaming two ~2GB gzipped files.
 
+**Optional — metric series.** `metric_datapoints` is DB-only (excluded from the
+public dump). Without it the metric fields emit `null(absent)` and everything else
+still runs.
+
+```bash
+export DATABASE_URI='postgresql://…'                # never commit this
+python3 scripts/pull_metrics.py --since 2026-07-01 --out data/metrics.json
 ```
-samples/81-agent-days-2026-08-26..2026-08-28/
-    2026-08-26.jsonl    one record per agent active that day
-    manifest.json       feature_version + the constants used
-
-Output directories are named for what they contain — `--out` overrides.
-```
-
-## Example output
-
-`samples/example_block.txt` and `samples/example_record.json` are **synthetic** —
-fabricated values pushed through the real `Block`/`render` path, so the shape is
-exact. Regenerate with `python3 samples/make_sample.py`.
-
-Real output is **not** committed. `samples/*/` and `data/` are gitignored: the source
-dataset is gated ("use for research and analysis… do not attempt to re-identify"),
-and a record's `context` section carries verbatim agent memory, session goals and
-chat.
 
 ## Layout
 
 ```
-drift/config.py     every tunable constant, each with the measurement behind it
-drift/load.py       streaming loaders; provider-shape message splitting
-drift/features.py   the computations
+drift/config.py     tunable constants; each carries the measurement behind it
+drift/load.py       streaming loaders + provider-shape message splitting
+drift/features.py   the feature computations
 drift/build.py      agent-major precompute -> day-major emission
-drift/render.py     record -> the text block the judge sees
-tests/              unit tests for the parts that have silently broken before
+drift/render.py     record -> the text block the judge reads
+scripts/            pull_metrics.py (DB-only metric series)
+samples/            synthetic example; real runs land here and are gitignored
+tests/              unit + structural tests
 ```
 
-## Design notes
+## Output
 
-These are not preferences. Each was measured; several replaced an approach that
-failed. Full detail in `ai-village-stage1-feature-spec.md`.
+One JSON record per agent-day, plus a manifest recording the feature version and
+every constant used.
 
-**Precompute agent-major, emit day-major.** Rolling windows need each agent's whole
-series, but the LLM sweep must run day-major — the ~100k shared village transcript
-caches across the agents *within* a day, and agent-major ordering expires that cache
-and pays ~23× on the shared block.
+```
+samples/82-agent-days-2026-08-26..2026-08-28/
+    2026-08-26.jsonl
+    manifest.json
+```
 
-**Null is not zero.** Three kinds, routing the judge differently: `absent` (no data
-exists — don't hunt, and don't read as flat), `extract_failed` (data exists, the rule
-missed it — go read the logs), `edge` (series boundary — ignore).
+Each record has two parts. **Facts** are computed statistics, each marked for how
+far to trust it. **Context** is raw material the judge reads and interprets itself.
 
-**Heuristic fields are marked.** Anything depending on a regex, threshold or
-segmentation choice carries `heuristic: true`. Counts of rows cannot be wrong;
-these can, and the judge is told to verify them when load-bearing.
+```
+GOAL              assigned goal; how much of its wording survives in memory
+MEMORY            snapshot count; persistence and first-seen date of named rules
+ASSIGNED-METRIC   the goal's metric, its source, and whether it is moving
+ACTIVITY          turns vs this agent's own norm; bash/gui/pause mix; span
+ARTIFACTS         what the day's work was pointed at; new vs revisited
+REPETITION        how much of the day was one action, or one plan, repeated
+INTERACTION       chat volume; which peers the day was organised around
+-----
+CONTEXT           prior memory outline · prior 14 active days of session goals
+```
 
-**Neutral naming.** `clauses_added`, not `prohibition_count`. A loaded field name
-smuggles a hypothesis into an exploratory sweep, and labels here are retrofitted
-after clustering, not assumed up front. There is deliberately **no** verdict, score
-or `signals_fired` row — the moment one exists the judge starts checking boxes
-instead of reading the day.
+`samples/example_block.txt` shows the rendered form. It is **synthetic** —
+fabricated values through the real render path — because real records carry
+verbatim agent memory and chat from a gated dataset. Regenerate with
+`python3 samples/make_sample.py`.
 
-**Windows use ACTIVE days**, never calendar days. Agents skip weekends and go
-dormant; one agent has 38 active days across a 7-week goal.
+### Reading a record
 
-### Two approaches that were measured and cut
+**`[heuristic]`** marks any value depending on a regex, threshold or segmentation
+choice. Plain counts cannot be wrong; these can, and the judge is told to verify
+them when they are load-bearing.
 
-**Clause-level memory diffing.** Verbatim clause survival across a day ranges 2–68%
-by agent — these agents *rewrite* memory wholesale rather than editing it.
-Normalisation doesn't help (98%→99% for the worst agent) and fuzzy matching is
-infeasible (killed at 15 minutes on 5 agents). Replaced by `watchlist_persistence`
-over *named* items, which survive 36–97%.
+**`null` is never zero.** Three kinds, each routing differently:
 
-**Goal-line extraction from memory.** Five patterns scored 0–98% (median ~25%) across
-42 agents; the four highest-volume agents all sit at 18–29%. There is no recoverable
-format. Replaced by `assigned_goal_words_present` — bag-of-words containment, needing
-no extraction — with goal *restatement* moved to the judge.
+| | meaning |
+|---|---|
+| `null(absent)` | no data exists — do not hunt, and do not read as flat |
+| `null(extract_failed)` | data exists, the rule missed it — go read the logs |
+| `null(edge)` | series boundary — ignore |
 
-### Validated against independently-parsed ground truth
+The distinction matters most for metrics. A goal whose metric is self-reported has
+no instrument at all, so a flat value is *no signal* rather than evidence of
+stagnation — the block says so instead of emitting a number.
 
-A separate parser reads the dump directly (no `drift/` imports) and recomputes
-9 fields per agent-day. On 2026-08-26..28, 82 records: **all 9 fields match on
-every record**. That pass found two real defects that unit tests on pure
-functions could not have caught — both about *which rows land on which day*:
+**Field names are deliberately neutral** (`clauses_added`, not
+`prohibition_count`), and there is no score, severity or `signals_fired` row. In a
+discovery sweep a loaded name presumes the answer, and a summary verdict turns the
+judge into a checklist.
 
-* **Cross-midnight turns.** Turns were keyed by the day their SESSION opened.
-  A session starting 23:58 put its post-midnight work on the previous date —
-  GPT-5 had 13 bash turns on the wrong day. Turns are now keyed by the day the
-  turn happened, and an agent-day exists if there was a session **or** a turn.
-* **`command=""` counted as bash.** The filter used `is not None`, so
-  empty-string commands became work. Over-counted GPT-5 by 5 turns/day.
+## Design decisions
 
-`tests/test_structure.py` pins both, plus date-range handling, lookback,
-cross-agent isolation, goal fallback, and that the byte-prefilter cannot change
-results.
+Constants are not preferences — each was measured, and several replaced an
+approach that failed. Reasoning is recorded inline in `drift/config.py` and in
+full in `ai-village-stage1-feature-spec.md`. In brief:
 
-### Performance traps hit while building this
+- **Precompute agent-major, emit day-major.** Rolling windows need each agent's
+  whole series; the Stage-2 sweep must run day-major so the shared village
+  transcript stays in prompt cache.
+- **Turns belong to the day they happened**, not the day their session opened —
+  sessions cross midnight.
+- **Windows count active days**, never calendar days. Agents skip weekends and go
+  dormant.
+- **Baselines compare like for like.** "Unusual for this agent" is measured
+  against that agent's own prior 14 active days, in the same units.
+- **Memory comparison is semantic, not mechanical.** Clause-level diffing and
+  goal-line extraction were both measured and cut: agents rewrite memory wholesale
+  and share no goal-line format. What survives is persistence of *named* rules,
+  plus showing the judge the prior snapshot.
 
-Recorded because each cost a debugging cycle and each is easy to reintroduce.
-
-1. **`SequenceMatcher` is O(n²) in string length.** Bash commands here reach 34KB;
-   comparing a few dozen hangs outright. Similarity is token-set Jaccard.
-2. **Prefix blocking splits real groups.** Agents prepend a varying comment to
-   otherwise-identical commands, so blocking is on a sorted vocabulary signature.
-3. **Blocking alone doesn't bound the worst case.** An agent whose commands all open
-   the same way lands everything in one bucket; buckets above a limit are taken at
-   face value.
-4. **Date-prefilter before `json.loads`.** Parsing every row just to read a date is
-   the entire cost of a narrow run.
-
-## Metric fields (Signal 2)
-
-`metric_datapoints` is **DB-only** — excluded from the public dump — so pull it first:
+## Testing
 
 ```bash
-export DATABASE_URI='postgresql://…'          # never commit this
-python3 scripts/pull_metrics.py --since 2026-07-01 --out data/metrics.json
+python3 -m pytest tests/ -q        # or run the modules directly
 ```
 
-1,410 daily rows / 27 keys as of 2026-09. Absent file ⇒ the metric fields emit
-`null(absent)`; everything else still runs.
+Unit tests cover the parts that have silently broken: provider-shape message
+splitting, word-boundary name matching, bash capping, null semantics. Structural
+tests use synthetic fixtures for date-range emission, lookback, cross-midnight day
+assignment, cross-agent isolation, goal fallback, baseline units, and that the
+byte-prefilter cannot change results.
 
-Three null conditions, all mandatory:
+Output is also validated against an independent parser that reads the dump
+directly with no `drift/` imports and recomputes nine fields per agent-day. On
+2026-08-26..28 all nine match on every record.
 
-* **`source ∈ {self-report, manual}` ⇒ `null(absent)`.** A flat self-reported metric
-  is *no signal*, not evidence — the agent is the instrument. Several goals were
-  never instrumented at all (one wellbeing metric has 8 manual datapoints in its
-  entire life).
-* **source changes inside the 7-day window ⇒ `null(absent)`.** Several metrics switch
-  self-report → real instrument on 2026-08-14; a straddling slope measures the
-  instrument, not the agent.
-* **fewer than 7 active days, or before 2026-07-06 ⇒ `null(edge)`.** The series does
-  not exist earlier.
+## Data handling
 
-`agent_actions_touching_this_source` is the one genuinely hand-mapped field, keyed by
-**source** (13) rather than goal (27) — fewer, and stable as goals change.
+The source dataset is gated ("use for research and analysis… do not attempt to
+re-identify"). `samples/*/` and `data/` are gitignored: records carry verbatim
+agent memory, session goals and chat. Only the synthetic fixture is committed.
 
-## Not implemented yet
+Database credentials are read from `DATABASE_URI` and must never be committed.
 
-- Bash capping is implemented (`features.cap_bash`) but the day's turn text is not
-  yet rendered; Stage 2 input assembly is the next piece.
+## Status
+
+Stage 1 is implemented and validated. Not yet built: Stage 2 input assembly
+(`features.cap_bash` exists but the day's turn text is not rendered yet), and the
+judge prompt itself.
