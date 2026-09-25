@@ -91,8 +91,10 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
     for v in days_by_agent.values():
         v.sort()
 
+    log("precompute (agent-major)…")
     records: list[dict] = []
-    for aid, days in days_by_agent.items():
+    for ai, (aid, days) in enumerate(days_by_agent.items(), 1):
+        log(f"  [{ai}/{len(days_by_agent)}] {agents.get(aid, aid)} — {len(days)} day(s)")
         name = agents.get(aid, aid)
         hosts_seen: set[str] = set()
         first_seen: dict[str, str] = {}

@@ -93,19 +93,69 @@ def cap_bash(command: str) -> str:
     )
 
 
-def largest_cluster(items: list[str], threshold: float) -> tuple[int, str | None]:
-    """Greedy: biggest set of near-identical strings. Mirrors the bash method."""
+def _tokens(text: str, limit: int = 400) -> frozenset:
+    return frozenset(normalise(text).split()[:limit])
+
+
+def _jaccard(a: frozenset, b: frozenset) -> float:
+    if not a and not b:
+        return 1.0
+    inter = len(a & b)
+    return inter / (len(a) + len(b) - inter) if (a or b) else 0.0
+
+
+def largest_cluster(
+    items: list[str], threshold: float, block_chars: int = 60,
+    cap: int = 4000, max_bucket: int = 400,
+) -> tuple[int, str | None]:
+    """Biggest set of near-identical strings.
+
+    Similarity is **token-set Jaccard**, not SequenceMatcher. SequenceMatcher is
+    O(len^2) in STRING LENGTH, and bash commands here reach 34KB — comparing a
+    few dozen of those hangs outright (observed). Jaccard is linear in length
+    and its sets are built once per item.
+
+    Blocked first: bucket by a normalised 60-char prefix, compare only inside a
+    bucket. Blocking alone does not bound the worst case — an agent whose
+    commands all open the same way lands ~everything in one bucket — so above
+    `max_bucket` the bucket is taken at face value: sharing a 60-char
+    *normalised* prefix is already strong evidence of near-identity.
+
+    Prefix matching ALONE is not enough: it merges different programs that
+    share an opening line, which produced a bogus 23.8% dedup figure in spec
+    work. Hence prefix-to-block, Jaccard-to-verify.
+    """
     if not items:
         return 0, None
-    best_n, best_seed = 0, None
+    if len(items) > cap:
+        items = items[:cap]
+
     normed = [normalise(x) for x in items]
-    for i, seed in enumerate(normed):
-        n = sum(
-            1 for other in normed
-            if difflib.SequenceMatcher(None, seed, other).ratio() >= threshold
-        )
-        if n > best_n:
-            best_n, best_seed = n, items[i]
+    # Block on a VOCABULARY signature, not a prefix. Agents prepend a different
+    # comment to each otherwise-identical command ("# Check for timestamp #40
+    # arrival\ntail -3 …"), so prefix blocking split one real group of 175 into
+    # singletons on the first run. Longest tokens are stable across those.
+    buckets: dict[tuple, list[int]] = {}
+    for i, n in enumerate(normed):
+        toks = sorted(set(n.split()), key=lambda w: (-len(w), w))[:8]
+        buckets.setdefault(tuple(sorted(toks)), []).append(i)
+
+    best_n, best_seed = 0, None
+    for idxs in buckets.values():
+        if len(idxs) <= best_n:
+            continue
+        if len(idxs) == 1:
+            if best_n < 1:
+                best_n, best_seed = 1, items[idxs[0]]
+            continue
+        if len(idxs) > max_bucket:
+            best_n, best_seed = len(idxs), items[idxs[0]]
+            continue
+        toks = {i: _tokens(items[i]) for i in idxs}
+        for i in idxs:
+            n = sum(1 for j in idxs if _jaccard(toks[i], toks[j]) >= threshold)
+            if n > best_n:
+                best_n, best_seed = n, items[i]
     return best_n, best_seed
 
 
@@ -203,7 +253,8 @@ def activity_features(block: Block, turns: list[dict], baseline: dict | None) ->
         or (t["action"] and t["action"] not in config.DROP_ACTIONS)
     ]
     n = len(kept)
-    block.put("turns", n)
+    block.put("turns_kept", n, note="behavioural turns; cursor/screenshot noise dropped")
+    block.put("turns_raw", len(turns))
     if not n:
         return
 
@@ -264,6 +315,30 @@ def artifact_features(block: Block, turns: list[dict], seen_before: set[str]) ->
 
 def repetition_features(block: Block, turns: list[dict], session_goals: list[str]) -> None:
     commands = [t["command"] for t in turns if t["command"]]
+
+    # Topic concentration — distinct from both repetition and hosts. B11 ran 175
+    # of 408 bash commands against Moltbook, but they were 175 DIFFERENT commands
+    # (so no similarity cluster) and mostly `tail /tmp/…log` with no URL (so no
+    # host hit). Neither other field sees it. Most-common token does.
+    if commands:
+        vocab: Counter = Counter()
+        for cmd in commands:
+            for tok in set(normalise(cmd).split()):
+                if (len(tok) > 3 and not tok.isdigit()
+                        and tok not in config.STOPWORDS
+                        and tok not in config.SHELL_NOISE):
+                    vocab[tok] += 1
+        if vocab:
+            tok, hits = vocab.most_common(1)[0]
+            block.put(
+                "command_topic_concentration",
+                {"token": tok, "in_commands": hits, "of": len(commands),
+                 "share": round(hits / len(commands), 2),
+                 "next": vocab.most_common(4)[1:]},
+                heuristic=True,
+                note="most frequent token across bash commands; topic focus, not repetition",
+            )
+
     if commands:
         n, seed = largest_cluster(commands, config.REPETITION_THRESHOLD)
         block.put(

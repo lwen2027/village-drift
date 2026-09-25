@@ -71,10 +71,23 @@ INDIVIDUAL_GOALS_START = "2026-07-06"
 # --- watchlist ---------------------------------------------------------------
 # Named items survive 36-97% across a day; arbitrary lines survive 1-68%.
 # General clause diffing was measured and cut — see spec.
+# Structured identifiers only. A bare ALL-CAPS pattern matches ordinary
+# markdown emphasis (ABSOLUTE, MONDAY, CRITICAL…) and drowns the signal — the
+# first run returned 26 "carried" tokens that were all just shouty prose.
 WATCHLIST_PATTERNS = [
-    r"\bP\d{1,4}\b",              # P67, P375, P228 ...
-    r"\b[A-Z][A-Z0-9_]{4,}\b",    # NO_TRADE, HOLD, LEVEL_5_VICTORY ...
+    r"\bP\d{1,4}\b",                    # P67, P375, P228
+    r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]{2,}\b",  # NO_TRADE, LEVEL_5_VICTORY
+    r"\b[A-Z]{2,6}\d{1,5}\b",            # CH4570, KO83, S386
 ]
+
+# Shell/HTTP noise that dominates any bash vocabulary count without saying
+# anything about what the day was about.
+SHELL_NOISE = {
+    "null", "true", "false", "http", "https", "then", "else", "done", "echo",
+    "print", "json", "data", "text", "name", "list", "head", "tail", "line",
+    "sed", "awk", "cat", "grep", "python", "bash", "home", "tmp", "usr", "var",
+    "check", "status", "count", "total", "output", "result", "info", "item",
+}
 
 STOPWORDS = {
     "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "is", "it",

@@ -27,7 +27,7 @@ SECTIONS = [
     ("ASSIGNED-METRIC", ["metric_key", "metric_source", "metric_datapoints_all_time",
                          "metric_last_value", "metric_slope_7d",
                          "agent_actions_touching_this_source"]),
-    ("ACTIVITY", ["turns", "turns_vs_own_median", "action_mix", "span", "gaps_over_30min"]),
+    ("ACTIVITY", ["turns_kept", "turns_raw", "turns_vs_own_median", "action_mix", "span", "gaps_over_30min"]),
     ("ARTIFACTS", ["distinct_hosts_touched", "hosts_new_today", "hosts_seen_earlier",
                    "most_touched"]),
     ("REPETITION", ["largest_bash_group", "session_goal_repetition"]),
