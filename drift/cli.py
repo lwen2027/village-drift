@@ -10,8 +10,9 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Stage 1 feature extraction")
     p.add_argument("--start", help="YYYY-MM-DD inclusive")
     p.add_argument("--end", help="YYYY-MM-DD inclusive")
-    p.add_argument("--out", default="samples/run",
-                   help="real output; samples/<run>/ is gitignored")
+    p.add_argument("--out", help="output dir; default is a self-describing "
+                                 "samples/<N>-agent-days-<start>..<end>/ "
+                                 "(samples/*/ is gitignored)")
     p.add_argument("--preview", metavar="AGENT",
                    help="render one agent's block to stdout instead of writing")
     a = p.parse_args()
@@ -23,8 +24,9 @@ def main() -> None:
             raise SystemExit(f"no records for {a.preview!r} in range")
         print(render.render(hits[-1]))
         return
-    build.write(records, a.out)
-    print(f"wrote {len(records):,} records to {a.out}/")
+    out = a.out or build.default_out_dir(records)
+    build.write(records, out)
+    print(f"wrote {len(records):,} records to {out}/")
 
 
 if __name__ == "__main__":

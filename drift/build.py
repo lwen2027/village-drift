@@ -178,6 +178,20 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
     return records
 
 
+def default_out_dir(records: list[dict], root: str = "samples") -> str:
+    """Self-describing name: how many records, over what range.
+
+    A bare `run/` tells you nothing three weeks later, and these directories
+    accumulate while iterating on the feature set.
+    """
+    if not records:
+        return os.path.join(root, "0-agent-days-empty")
+    days = [r["day"] for r in records]
+    return os.path.join(
+        root, f"{len(records)}-agent-days-{min(days)}..{max(days)}"
+    )
+
+
 def write(records: list[dict], out_dir: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
     by_day: dict[str, list[dict]] = defaultdict(list)

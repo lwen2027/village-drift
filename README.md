@@ -11,7 +11,7 @@ see **Design notes** below.
 
 ```bash
 export VILLAGE_DATA=~/Documents/ai-village     # the dataset dump
-python3 -m drift.cli --start 2026-08-26 --end 2026-08-28 --out samples/run-aug
+python3 -m drift.cli --start 2026-08-26 --end 2026-08-28
 python3 -m drift.cli --start 2026-08-26 --end 2026-08-28 --preview "Claude Haiku 4.5"
 ```
 
@@ -19,8 +19,11 @@ Stdlib only. `orjson` is used automatically if installed (3–5× faster parsing
 A 3-day range takes ~45s; the dominant cost is streaming two ~2GB gzipped files.
 
 ```
-samples/run-aug/2026-08-26.jsonl   one record per agent active that day
-samples/run-aug/manifest.json      feature_version + the constants used
+samples/81-agent-days-2026-08-26..2026-08-28/
+    2026-08-26.jsonl    one record per agent active that day
+    manifest.json       feature_version + the constants used
+
+Output directories are named for what they contain — `--out` overrides.
 ```
 
 ## Example output
