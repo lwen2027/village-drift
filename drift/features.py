@@ -428,3 +428,86 @@ def history_strip(prior_days: list[tuple[str, str]]) -> list[str]:
         f"{day}  {goal[: config.HISTORY_GOAL_CHARS]}"
         for day, goal in prior_days[-config.HISTORY_STRIP_DAYS :]
     ]
+
+
+# --- ASSIGNED-METRIC ---------------------------------------------------------
+# Signal 2: "metric flat while the agent is still taking turns". Objective, but
+# only where a real instrument exists — several goals were never instrumented
+# (one wellbeing metric has 8 manual datapoints in its entire life).
+
+
+def _slope(points: list[tuple[int, float]]) -> float | None:
+    """OLS slope over (index, value). None if degenerate."""
+    n = len(points)
+    if n < 2:
+        return None
+    mx = sum(p[0] for p in points) / n
+    my = sum(p[1] for p in points) / n
+    den = sum((p[0] - mx) ** 2 for p in points)
+    if den == 0:
+        return None
+    return sum((p[0] - mx) * (p[1] - my) for p in points) / den
+
+
+def metric_features(
+    block: Block, series: list[dict] | None, metric_key: str | None,
+    day: str, turns: list[dict],
+) -> None:
+    if not series or not metric_key:
+        block.put("metric_key", Null("absent", "no metric series for this goal"))
+        return
+    block.put("metric_key", metric_key)
+
+    upto = [p for p in series if p["day"] <= day]
+    if not upto:
+        block.put("metric_source", Null("edge", "series starts after this day"))
+        return
+
+    today = upto[-1]
+    source = today["last_source"]
+    block.put("metric_source", source)
+    block.put("metric_datapoints_all_time", len(series))
+
+    # A flat SELF-REPORTED metric is no signal, not evidence — treating it as
+    # evidence reproduces the failure mechanical-over-judge exists to avoid.
+    if source in config.UNINSTRUMENTED_SOURCES:
+        why = f"source is {source}; the agent is the instrument"
+        block.put("metric_last_value", Null("absent", why))
+        block.put("metric_slope_7d", Null("absent", why))
+        block.put("agent_actions_touching_this_source",
+                  Null("absent", "no observable endpoint for this source"))
+        return
+
+    block.put("metric_last_value", today["last_value"])
+
+    window = upto[-config.METRIC_SLOPE_DAYS :]
+    if day < config.METRICS_START:
+        block.put("metric_slope_7d",
+                  Null("edge", f"series starts {config.METRICS_START}"))
+    elif len(window) < config.METRIC_SLOPE_DAYS:
+        block.put("metric_slope_7d",
+                  Null("edge", f"only {len(window)} of "
+                               f"{config.METRIC_SLOPE_DAYS} days available"))
+    elif len({p["last_source"] for p in window}) > 1:
+        # Several metrics switch self-report -> real instrument on 2026-08-14.
+        # A slope straddling that measures the instrument, not the agent.
+        srcs = sorted({p["last_source"] for p in window})
+        block.put("metric_slope_7d",
+                  Null("absent", f"source changed inside the window: {srcs}"))
+    else:
+        s = _slope([(i, float(p["last_value"])) for i, p in enumerate(window)])
+        block.put("metric_slope_7d", None if s is None else round(s, 3),
+                  note=f"OLS over {len(window)} active days")
+
+    hosts = config.METRIC_SOURCE_HOSTS.get(source)
+    if not hosts:
+        block.put("agent_actions_touching_this_source",
+                  Null("absent", f"no endpoint mapped for source {source}"),
+                  heuristic=True)
+    else:
+        hits = sum(
+            1 for t in turns
+            if t["command"] and any(h in t["command"] for h in hosts)
+        )
+        block.put("agent_actions_touching_this_source", hits, heuristic=True,
+                  note=f"bash commands mentioning {hosts}")

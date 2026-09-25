@@ -259,3 +259,28 @@ def load_chat(start=None, end=None) -> dict[str, list[dict]]:
     for v in out.values():
         v.sort(key=lambda m: m["ts"])
     return out
+
+
+def load_metrics(path: str | None = None) -> dict[tuple, list[dict]]:
+    """(agent_name, metric_key) -> [{day, last_value, last_source}, ...] sorted.
+
+    Produced by scripts/pull_metrics.py. metric_datapoints is DB-only — it is
+    excluded from the public dump — so this is optional; absent file means the
+    metric fields emit null(absent).
+    """
+    import json as _json
+
+    path = path or os.path.join("data", "metrics.json")
+    if not os.path.exists(path):
+        return {}
+    out: dict[tuple, list[dict]] = defaultdict(list)
+    for r in _json.load(open(path)):
+        if not r.get("agent"):
+            continue
+        out[(r["agent"], r["metric_key"])].append(
+            {"day": r["day"], "last_value": r["last_value"],
+             "last_source": r["last_source"]}
+        )
+    for v in out.values():
+        v.sort(key=lambda x: x["day"])
+    return out

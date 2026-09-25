@@ -94,6 +94,13 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
     log("loading chat…")
     chat = load.load_chat(load_start, end)
 
+    metrics = load.load_metrics()
+    log(f"  metric series: {len(metrics)} (agent, key) pairs"
+        if metrics else "  metric series: none (run scripts/pull_metrics.py)")
+    metric_key_for = {}
+    for (agent_name, key) in metrics:
+        metric_key_for.setdefault(agent_name, key)
+
     # ---- agent-major precompute -------------------------------------------
     days_by_agent: dict[str, list[str]] = defaultdict(list)
     for (aid, day) in sessions_by_agent_day:
@@ -135,6 +142,10 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
                 counts = [len(turns.get((aid, d), [])) for d in prior]
                 baseline = {"turns": statistics.median(counts) or None}
 
+            mkey = metric_key_for.get(name)
+            F.metric_features(
+                block, metrics.get((name, mkey)) if mkey else None, mkey, day, day_turns
+            )
             F.activity_features(block, day_turns, baseline)
             F.artifact_features(block, day_turns, hosts_seen)
             F.repetition_features(block, day_turns, session_goals)

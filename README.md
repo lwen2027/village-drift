@@ -88,12 +88,34 @@ Recorded because each cost a debugging cycle and each is easy to reintroduce.
 4. **Date-prefilter before `json.loads`.** Parsing every row just to read a date is
    the entire cost of a narrow run.
 
+## Metric fields (Signal 2)
+
+`metric_datapoints` is **DB-only** — excluded from the public dump — so pull it first:
+
+```bash
+export DATABASE_URI='postgresql://…'          # never commit this
+python3 scripts/pull_metrics.py --since 2026-07-01 --out data/metrics.json
+```
+
+1,410 daily rows / 27 keys as of 2026-09. Absent file ⇒ the metric fields emit
+`null(absent)`; everything else still runs.
+
+Three null conditions, all mandatory:
+
+* **`source ∈ {self-report, manual}` ⇒ `null(absent)`.** A flat self-reported metric
+  is *no signal*, not evidence — the agent is the instrument. Several goals were
+  never instrumented at all (one wellbeing metric has 8 manual datapoints in its
+  entire life).
+* **source changes inside the 7-day window ⇒ `null(absent)`.** Several metrics switch
+  self-report → real instrument on 2026-08-14; a straddling slope measures the
+  instrument, not the agent.
+* **fewer than 7 active days, or before 2026-07-06 ⇒ `null(edge)`.** The series does
+  not exist earlier.
+
+`agent_actions_touching_this_source` is the one genuinely hand-mapped field, keyed by
+**source** (13) rather than goal (27) — fewer, and stable as goals change.
+
 ## Not implemented yet
 
-- `metric_*` fields — `metric_datapoints` is **DB-only**, excluded from the public
-  dump. `scripts/pull_metrics.py` is the intended entry point; reads `DATABASE_URI`
-  from the environment. **Never commit a connection string.**
-- `agent_actions_touching_this_source` — needs a per-goal map of which tool call
-  would observe that metric (27 goals). The only genuinely hand-mapped field.
 - Bash capping is implemented (`features.cap_bash`) but the day's turn text is not
   yet rendered; Stage 2 input assembly is the next piece.

@@ -73,6 +73,26 @@ METRICS_START = "2026-07-06"
 # Individual agent goals begin here; earlier days fall back to village_goals.
 INDIVIDUAL_GOALS_START = "2026-07-06"
 
+# Which host an agent would hit to observe its own metric. Mapped per SOURCE
+# (13) rather than per goal (27) — fewer, and stable as goals change.
+# This is the one genuinely hand-mapped thing in Stage 1.
+METRIC_SOURCE_HOSTS = {
+    "youtube-api": ["youtube.com", "youtu.be", "studio.youtube"],
+    "manifold-api": ["manifold.markets"],
+    "twitter-pulse": ["twitter.com", "x.com", "syndication"],
+    "substack-public-rounded": ["substack.com"],
+    "gitlab-api": ["gitlab.com"],
+    "gitlab-readme-scrape": ["gitlab.com", "gitlab.io"],
+    "gitlab-registry-json": ["gitlab.com", "gitlab.io"],
+    "agent-roster-json": ["gitlab.io", "gitlab.com"],
+    "site-scrape": ["gitlab.io"],
+    "agent-built-counter": ["gitlab.io", "/stats", "/sources"],
+    # no observable endpoint: the agent IS the instrument
+    "self-report": [],
+    "manual": [],
+    "computed": [],
+}
+
 # --- watchlist ---------------------------------------------------------------
 # Named items survive 36-97% across a day; arbitrary lines survive 1-68%.
 # General clause diffing was measured and cut — see spec.
