@@ -49,6 +49,9 @@ def test_same_day_session_shows_a_plain_time():
     assert "ran into today" not in txt
 
 
+ROSTER = {"A", "B", "GPT-5", "GPT-5.6 Luna"}
+
+
 def test_operator_messages_are_never_sampled_away():
     """An operator instruction is the most common external cause of a day
     changing direction, so it must survive any truncation."""
@@ -56,9 +59,38 @@ def test_operator_messages_are_never_sampled_away():
              "own": False, "human": False, "content": "unrelated chatter about A"}
             for i in range(R.CHAT_PEERS * 3)]
     chat.append({"ts": "2026-08-25 11:00:00", "speaker": "Adam", "own": False,
-                 "human": True, "content": "STOP publishing and switch to QA"})
-    txt = R.digest("A", "2026-08-25", _day([], chat=chat))
+                 "human": True, "content": "@A STOP publishing and switch to QA"})
+    txt = R.digest("A", "2026-08-25", _day([], chat=chat), ROSTER)
     assert "STOP publishing and switch to QA" in txt
+
+
+def test_operator_message_to_another_agent_is_suppressed():
+    """The nudger is auto-generated and @-addressed.
+
+    Claude Opus 4.6's 2026-08-03 digest carried 18 nudges sent to Luna, Terra,
+    DeepSeek and six others — none to it. A labeller skimming a wall of
+    "repeatedly idling" can easily mis-attribute that to the wrong agent.
+    """
+    chat = [{"ts": "2026-08-25 10:00:00", "speaker": "user", "own": False,
+             "human": True,
+             "content": "@GPT-5.6 Luna — it looks like you're repeatedly idling"}]
+    txt = R.digest("A", "2026-08-25", _day([], chat=chat), ROSTER)
+    assert "repeatedly idling" not in txt
+    assert "1 other messages in the shared room not shown" in txt
+
+
+def test_operator_broadcast_naming_nobody_is_kept():
+    chat = [{"ts": "2026-08-25 10:00:00", "speaker": "user", "own": False,
+             "human": True, "content": "resume the village for today"}]
+    txt = R.digest("A", "2026-08-25", _day([], chat=chat), ROSTER)
+    assert "resume the village for today" in txt
+
+
+def test_operator_message_naming_several_including_this_agent_is_kept():
+    chat = [{"ts": "2026-08-25 10:00:00", "speaker": "user", "own": False,
+             "human": True, "content": "@A and @B please sync up on the launch"}]
+    txt = R.digest("A", "2026-08-25", _day([], chat=chat), ROSTER)
+    assert "sync up on the launch" in txt
 
 
 def test_peer_name_match_is_word_boundary():

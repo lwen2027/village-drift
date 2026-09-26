@@ -58,14 +58,35 @@ def _systematic(items: list, n: int) -> list:
     return [items[min(len(items) - 1, int(i * step))] for i in range(n)]
 
 
+def _addressed_to(text: str, agent: str, roster: set) -> bool:
+    """Is this human/operator message for THIS agent?
+
+    Show it if it names the agent, or names no agent at all (a broadcast like
+    "resume the village for today"). Suppress it if it names only other agents.
+
+    Without this, the nudger drowns the section: it is auto-generated and
+    @-addressed, so on 2026-08-03 Claude Opus 4.6's digest carried 18 nudges
+    sent to Luna, Terra, DeepSeek and six others, and one message actually for
+    everyone. A labeller skimming a wall of "repeatedly idling" can easily
+    mis-attribute it to the agent whose digest it is.
+    """
+    named = {a for a in roster if _names_agent(text, a)}
+    return not named or agent in named
+
+
 def _names_agent(text: str, agent: str) -> bool:
-    """Does this message name the agent? Word-boundary, not substring.
+    """Does this message name the agent? Word-boundary on BOTH sides.
 
     `@GPT-5` matching inside `@GPT-5.6` silently mis-attributed a nudge count
-    earlier in this project. The trailing guard is what prevents the repeat.
+    earlier in this project — that is what the trailing guard prevents. The
+    leading guard is the mirror image and matters just as much: without it,
+    agent "A" matched the final letter of "Luna", and "Sol" would match the end
+    of "parasol". `.` and `-` are excluded as well as \\w because agent names
+    contain both (GPT-5.6, Claude Opus 4.7).
     """
     import re
-    return bool(re.search(re.escape(agent) + r"(?![\w.\-])", text or "", re.I))
+    return bool(re.search(r"(?<![\w.\-])" + re.escape(agent) + r"(?![\w.\-])",
+                          text or "", re.I))
 
 
 def _clip(s, n):
@@ -73,7 +94,7 @@ def _clip(s, n):
     return s if len(s) <= n else s[:n] + f" …[+{len(s) - n}c]"
 
 
-def digest(agent: str, day: str, data: dict) -> str:
+def digest(agent: str, day: str, data: dict, roster: set = frozenset()) -> str:
     L: list[str] = []
     A = L.append
     A(f"AGENT-DAY DIGEST — {agent} — {day}")
@@ -115,11 +136,13 @@ def digest(agent: str, day: str, data: dict) -> str:
             A(f"         -> {_clip((t.get('output') or '') + (t.get('error') or ''), OUT_CHARS)}")
     A("")
 
-    keep = [c for c in data["chat"] if c["own"] or c["human"]]
+    # Own messages and operator messages addressed to this agent (or to nobody)
+    # are never sampled: an operator instruction is the most common external
+    # cause of a day changing direction. Peer messages that name it are sampled.
+    keep = [c for c in data["chat"]
+            if c["own"] or (c["human"] and _addressed_to(c["content"], agent, roster))]
     peers = [c for c in data["chat"]
              if not (c["own"] or c["human"]) and _names_agent(c["content"], agent)]
-    # Operator and own messages are never sampled: an operator instruction is the
-    # single most common external cause of a day changing direction.
     shown = sorted(keep + _systematic(peers, CHAT_PEERS), key=lambda c: str(c["ts"]))
     hidden = len(data["chat"]) - len(shown)
     A(f"## CHAT — {sum(1 for c in shown if c['own'])} sent by this agent, "
@@ -247,13 +270,14 @@ def main() -> None:
 
     rows = [json.loads(l) for l in open(a.labels)]
     days = {(r["agent"], r["day"]) for r in rows}
+    roster = {n for n in (x.get("name") for x in load._rows("agents.jsonl.gz")) if n}
     print(f"collecting {len(days)} agent-days …")
     data = collect(days)
 
     os.makedirs(a.out, exist_ok=True)
     shas, sizes = {}, []
     for (agent, day), d in sorted(data.items()):
-        txt = digest(agent, day, d)
+        txt = digest(agent, day, d, roster)
         safe = agent.replace("/", "_").replace(" ", "_")
         open(os.path.join(a.out, f"{day}__{safe}.txt"), "w").write(txt)
         shas[(agent, day)] = hashlib.sha256(txt.encode()).hexdigest()[:16]
