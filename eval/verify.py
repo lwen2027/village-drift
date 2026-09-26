@@ -31,11 +31,12 @@ table too, so the two never drift apart.
 # become the basis of the verdict — that conflates "this day was off-goal" with
 # "this episode was drift", and the detector only ever sees a day.
 #
-# day_determinable records whether the verdict is reachable from that day's own
-# evidence. 9 of the first 10 audits are; the exception is GPT-5.5 2026-08-20,
-# where the day alone reads as maintenance and only a 37-day history makes it
-# drift. That is not a flaw in the unit — it names a feature Stage 1 is missing,
-# here "days since this agent last attempted to move its assigned metric".
+# A day_determinable flag was added here and removed. It was meant to mark
+# labels unreachable from a single day, but under a properly day-scoped
+# question there are none: GPT-5.5 2026-08-20 spent 533 turns not pursuing DAU,
+# which the day shows on its own. What its 37-day history adds is CULPABILITY —
+# whether an available lever was declined or the agent was walled in — and that
+# is a different question from whether the day was off-goal. is_drift suffices.
 #
 # Per-goal labelling was considered and rejected: goals run 5 to 47+ active days,
 # a goal period routinely contains both on-goal and drifted days (Haiku's
