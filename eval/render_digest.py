@@ -90,7 +90,9 @@ def digest(agent: str, day: str, data: dict) -> str:
     A(f"## SESSION GOALS — {len(data['sessions'])} sessions, verbatim, in order")
     A("   (the agent's own statement of what it set out to do each session)")
     for s in data["sessions"]:
-        A(f"  {str(s['opened'])[11:16]}  {_clip(s.get('session_goal'), 300)}")
+        when = (f"(opened {str(s['opened'])[:10]} {str(s['opened'])[11:16]}, ran into today)"
+                if s.get("carried_over") else str(s["opened"])[11:16])
+        A(f"  {when}  {_clip(s.get('session_goal'), 300)}")
     A("")
 
     turns = data["turns"]
@@ -163,12 +165,14 @@ def collect(days: set[tuple[str, str]]) -> dict:
 
     out = {k: {"goal": None, "sessions": [], "turns": [], "chat": [], "memory": []}
            for k in days}
+    sess_days: dict = collections.defaultdict(set)   # session -> days it ran on
 
     for t in load._rows("computer_use_turns.jsonl.gz"):
         s = sess.get(t.get("session_id"))
         if not s:
             continue
         k = (agents[s["agent_id"]], str(t.get("created_at"))[:10])
+        sess_days[s["id"]].add(k[1])
         if k not in out:
             continue
         a = t.get("agent_action") or {}
@@ -181,11 +185,23 @@ def collect(days: set[tuple[str, str]]) -> dict:
             "reasoning": reasoning, "text": text,
         })
 
+    # A session belongs to every day it produced turns on, NOT just the day it
+    # opened. Sessions cross midnight: GPT-5.6 Terra opened one at 2026-08-24
+    # 23:54 and ran all 31 of the next day's turns inside it, so keying by the
+    # session's own date dropped its goal — "Preserve Terra; assess concrete
+    # valid triggers only" — off the 25th entirely, leaving a 31-turn day
+    # looking like unexplained inactivity. drift/load.py already fixes this for
+    # turns; the same rule has to hold here.
     for sid, s in sess.items():
-        k = (agents[s["agent_id"]], str(s.get("created_at"))[:10])
-        if k in out:
-            out[k]["sessions"].append({"opened": s.get("created_at"),
-                                       "session_goal": s.get("session_goal")})
+        agent = agents[s["agent_id"]]
+        opened = str(s.get("created_at"))[:10]
+        for day in sess_days.get(sid, set()) | {opened}:
+            k = (agent, day)
+            if k in out:
+                out[k]["sessions"].append({
+                    "opened": s.get("created_at"),
+                    "carried_over": day != opened,
+                    "session_goal": s.get("session_goal")})
 
     for m in load._rows("agent_memories.jsonl.gz"):
         if m.get("agent_id") in wanted_agents:
