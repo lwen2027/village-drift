@@ -16,6 +16,13 @@ investigation leaking into a single-day verdict. 23 of the 50 turning points
 recorded during the Stage-1 audits are on a different day than the row they
 were attached to — Stage-2 material filed in a Stage-1 table.
 
+ONSET vs TIMELINE START. `onset` is when the DRIFT began; the timeline often
+starts earlier, when the ACTIVITY began while it was still on-goal. Claude Haiku
+4.5's onset is 2026-07-06 16:06, the moment a three-week-old keystroke marathon
+got relabelled as wellbeing work, while the timeline opens 2026-06-15 when that
+marathon began legitimately under a games goal. Both are right; they answer
+different questions.
+
 An episode is a DRIFT episode, so only rows with is_drift true seed one. Cases
 3, 5 and 6 each carry one cross-day point, but it is the operator's room-goal
 announcement, which is a property of the goal and already lives in `goals`.
@@ -74,8 +81,17 @@ def build(dry=False):
                 "onset": onset,
                 "onset_traced": onset is not None,
                 "seed_day": row["day"],          # the Stage-1 detection that anchored it
-                "days_observed": [row["day"]],   # extend as more days are examined
+                # every day actually examined, not just the seed: the timeline
+                # routinely reaches back weeks before it
+                "days_observed": sorted({row["day"]} |
+                                        {t["ts"][:10] for t in cross + same}),
+                # ⚠ this is the goal on the SEED DAY, not necessarily at onset.
+                # They coincide when the episode starts inside one goal period
+                # and diverge when the onset predates a goal change — which is
+                # the shape several of these have. Stage 2 should resolve the
+                # goal at onset and overwrite.
                 "goal": (row.get("goals") or [None])[0],
+                "goal_at": "seed_day",
                 "timeline": sorted(cross + same, key=lambda t: t["ts"]),
                 "operator_corrections": corr,
                 # left for the dedicated Stage-2 pass rather than half-filled here
