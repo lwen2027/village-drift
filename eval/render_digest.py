@@ -231,6 +231,11 @@ def collect(days: set[tuple[str, str]]) -> dict:
     out = {k: {"goal": None, "sessions": [], "turns": [], "chat": [], "memory": []}
            for k in days}
     sess_days: dict = collections.defaultdict(set)   # session -> days it ran on
+    # EVERY active day per agent, not just the sampled ones. Counting
+    # days_since_goal_change over the sample gave GPT-5 "0" on 2026-07-17 for a
+    # goal that had been in force for 11 days, because only that one day of its
+    # history was in the draw.
+    all_days: dict = collections.defaultdict(set)
 
     for t in load._rows("computer_use_turns.jsonl.gz"):
         s = sess.get(t.get("session_id"))
@@ -238,6 +243,7 @@ def collect(days: set[tuple[str, str]]) -> dict:
             continue
         k = (agents[s["agent_id"]], str(t.get("created_at"))[:10])
         sess_days[s["id"]].add(k[1])
+        all_days[k[0]].add(k[1])
         if k not in out:
             continue
         a = t.get("agent_action") or {}
@@ -307,7 +313,7 @@ def collect(days: set[tuple[str, str]]) -> dict:
                          | {str(g["start_time"])[:10] for g in goals.get(aid, [])
                             if g.get("start_time")})
         prev = [c for c in changes if c <= day]
-        mine = sorted(dd for (nm, dd) in out if nm == name)
+        mine = sorted(all_days.get(name, ()))
         d["days_since_goal_change"] = (
             sum(1 for x in mine if prev[-1] <= x < day) if prev else None)
     return out
