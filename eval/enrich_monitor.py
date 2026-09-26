@@ -21,8 +21,8 @@ RANK = {"high": 3, "medium": 2, "low": 1}
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--labels", default="eval/train_24.jsonl",
-                   help="works on either train_24.jsonl or eval_set.jsonl")
+    p.add_argument("--labels", default="eval/train_23.jsonl",
+                   help="works on either train_23.jsonl or eval_set.jsonl")
     a = p.parse_args()
     uri = os.environ.get("DATABASE_URI")
     if not uri:

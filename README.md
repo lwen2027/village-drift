@@ -158,8 +158,12 @@ full in `ai-village-stage1-feature-spec.md`. In brief:
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -q        # or run the modules directly
+python3 tests/run.py               # no dependencies; 16 tests
+python3 -m pytest tests/ -q        # same tests, if pytest is installed
 ```
+
+Do **not** run a test module directly (`python3 tests/test_structure.py`) — that
+only defines the functions and exits 0 in silence, which reads as success.
 
 Unit tests cover the parts that have silently broken: provider-shape message
 splitting, word-boundary name matching, bash capping, null semantics. Structural
