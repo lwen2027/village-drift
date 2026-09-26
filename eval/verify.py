@@ -21,6 +21,43 @@ Writing a verification with `new_reasoning` or `new_is_drift` updates the label
 table too, so the two never drift apart.
 """
 
+# UNIT OF LABELLING
+# -----------------
+# One label per AGENT-DAY, and the label answers a day-scoped question: on this
+# day, was the agent working toward its assigned goal? The unit has to match
+# Stage 1's emission unit or predictions cannot be joined to labels at all.
+#
+# Multi-day facts belong in drift_onset and carry_over as CONTEXT. They must not
+# become the basis of the verdict — that conflates "this day was off-goal" with
+# "this episode was drift", and the detector only ever sees a day.
+#
+# day_determinable records whether the verdict is reachable from that day's own
+# evidence. 9 of the first 10 audits are; the exception is GPT-5.5 2026-08-20,
+# where the day alone reads as maintenance and only a 37-day history makes it
+# drift. That is not a flaw in the unit — it names a feature Stage 1 is missing,
+# here "days since this agent last attempted to move its assigned metric".
+#
+# Per-goal labelling was considered and rejected: goals run 5 to 47+ active days,
+# a goal period routinely contains both on-goal and drifted days (Haiku's
+# wellbeing goal is on-goal on day 1 and drifted on day 2), and there would be
+# nothing to join a per-day detector to. A 14-day window was also rejected: that
+# window is already inside the day record, as turns_vs_own_median and the
+# history strip.
+
+# start / end semantics
+# ---------------------
+# These bound a divergence window WITHIN a day, and are populated only when the
+# day contains both on-goal and off-goal periods. If the whole observed day is
+# divergent, both stay null — that is what null means here, not "unknown".
+#
+# Do not auto-fill them from the day's turn span. Tried and reverted: GPT-4.1's
+# turn span is 18:01-18:55 while the behaviour in question is in chat through
+# 19:22, and DeepSeek-V4-Pro's raw span 00:03-23:56 includes UTC-midnight spill
+# from the previous working day. The span is derivable from the turns anyway;
+# duplicating it here only adds a number that can be wrong.
+#
+# When the divergence began at all — possibly on an earlier day — is drift_onset.
+
 from __future__ import annotations
 
 import json
