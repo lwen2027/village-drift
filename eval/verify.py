@@ -127,7 +127,12 @@ def record(agent: str, day: str, *, claims, turning_points=(),
         row["operator_corrections"] = new_operator_corrections
         changed.append("operator_corrections")
     row["verified"] = True
-    audit["label_changed"] = changed
+    # Cumulative, not per-call. A later record() that only adds claims would
+    # otherwise erase the record that an earlier one changed is_drift — the
+    # audit is a history, and overwriting it defeats the point of the table.
+    prior = next((r.get("label_changed", []) for r in _load(AUDIT)
+                  if r["agent"] == agent and r["day"] == day), [])
+    audit["label_changed"] = sorted(set(prior) | set(changed))
 
     rows = [r for r in _load(AUDIT) if not (r["agent"] == agent and r["day"] == day)]
     rows.append(audit)
