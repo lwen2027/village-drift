@@ -15,6 +15,10 @@ sweeps/
 samples/*/
 # Labelled data quotes agent memory/chat from a gated dataset — rebuild locally
 eval/*.jsonl
+# The labelling surface and the failure-analysis dump are verbatim agent memory,
+# chat and reasoning. ~380 MB, and gated. Regenerate with render_digest.py.
+eval/digests/
+eval/raw/
 
 __pycache__/
 *.pyc
