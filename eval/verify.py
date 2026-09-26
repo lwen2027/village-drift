@@ -2,15 +2,15 @@
 
 Two tables, deliberately separate:
 
-  eval_100.jsonl      the LABEL   — is_drift and the one-paragraph case for it
-  verification.jsonl  the AUDIT   — which claims were checked against source,
-                                    what each one turned out to be, and what
-                                    changed as a result
+  eval_100.jsonl      the LABEL     — is_drift and the one-paragraph case for it
+  verification.jsonl  the EVIDENCE  — each assertion in that paragraph, with the
+                                      source backing it
 
-They are separate because a label is a conclusion and an audit is a history.
-Across this project roughly a third of deeply-read cases had a load-bearing
-error in them, so knowing WHICH parts of a label were checked against raw logs
-— and which are still first-pass inference — is worth as much as the label.
+`reasoning` in the label is an argument; it bundles several assertions into
+prose. The evidence table breaks it apart so each assertion can be traced to
+what the raw logs actually say. One entry per claim in the current reasoning —
+no verdicts and no revision history. When a pass changes its mind, it OVERWRITES
+the claim; the old version is simply gone.
 
     from eval.verify import record
     record(agent, day, claims=[...], turning_points=[...])
@@ -29,14 +29,6 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 LABELS = os.path.join(HERE, "eval_100.jsonl")
 AUDIT = os.path.join(HERE, "verification.jsonl")
-
-# What a checked claim can turn out to be.
-VERDICTS = {
-    "confirmed",   # the source says what the label said
-    "corrected",   # partly right; the label's version was materially off
-    "refuted",     # the source contradicts it outright
-    "unresolved",  # checked, and the record does not settle it
-}
 
 
 def _load(path):
@@ -57,10 +49,11 @@ def record(agent: str, day: str, *, claims, turning_points=(),
            new_carry_over="unchanged", new_goal_is_open="unchanged",
            new_goals=None, new_drift_onset="unchanged",
            new_operator_corrections=None, notes=None) -> dict:
-    """Append (or replace) the audit row for one agent-day, and sync the label."""
+    """Replace the evidence row for one agent-day, and sync the label."""
     for c in claims:
-        if c["verdict"] not in VERDICTS:
-            raise ValueError(f"bad verdict {c['verdict']!r}; expected one of {VERDICTS}")
+        for f in ("claim", "evidence"):
+            if not c.get(f):
+                raise ValueError(f"each claim needs {f}: {c}")
 
     labels = _load(LABELS)
     row = next((r for r in labels if r["agent"] == agent and r["day"] == day), None)
@@ -79,7 +72,7 @@ def record(agent: str, day: str, *, claims, turning_points=(),
         "notes": notes,
     }
 
-    changed = []
+    changed = []   # reported to the caller only; not stored
     if new_is_drift != "unchanged" and new_is_drift != row["is_drift"]:
         row["is_drift"] = new_is_drift
         changed.append("is_drift")
@@ -127,12 +120,6 @@ def record(agent: str, day: str, *, claims, turning_points=(),
         row["operator_corrections"] = new_operator_corrections
         changed.append("operator_corrections")
     row["verified"] = True
-    # Cumulative, not per-call. A later record() that only adds claims would
-    # otherwise erase the record that an earlier one changed is_drift — the
-    # audit is a history, and overwriting it defeats the point of the table.
-    prior = next((r.get("label_changed", []) for r in _load(AUDIT)
-                  if r["agent"] == agent and r["day"] == day), [])
-    audit["label_changed"] = sorted(set(prior) | set(changed))
 
     rows = [r for r in _load(AUDIT) if not (r["agent"] == agent and r["day"] == day)]
     rows.append(audit)
@@ -140,10 +127,8 @@ def record(agent: str, day: str, *, claims, turning_points=(),
     _write(AUDIT, rows)
     _write(LABELS, labels)
 
-    n = {v: sum(1 for c in claims if c["verdict"] == v) for v in VERDICTS}
-    print(f"{agent} {day}: {len(claims)} claims checked "
-          + " · ".join(f"{k} {v}" for k, v in n.items() if v)
-          + (f"   LABEL UPDATED: {', '.join(changed)}" if changed else "   label unchanged"))
+    print(f"{agent} {day}: {len(claims)} claims"
+          + (f"   updated: {', '.join(changed)}" if changed else ""))
     return audit
 
 
@@ -203,7 +188,7 @@ def check() -> int:
         if not a.get("sources"):
             bad.append(f"{k}: audit has no sources")
         for c in a.get("claims", []):
-            for f in ("claim", "verdict", "evidence"):
+            for f in ("claim", "evidence"):
                 if not c.get(f):
                     bad.append(f"{k}: a claim is missing {f}")
         for t in a.get("turning_points", []):
