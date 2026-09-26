@@ -8,6 +8,17 @@ Stage 1 and Stage 2 answer different questions and need different eval sets:
 
   STAGE 2   unit: episode.    "When did this start, why, what was available,
                                was it corrected?"
+
+            Three timestamps, two latencies, and neither latency is stored:
+              goal.start     -> onset   how fast it drifted after assignment
+              activity_start -> onset   how long the activity predates the drift
+            The pair separates mechanisms. Haiku 4.5 is 7 minutes on the first
+            and 21 days on the second: a RELABELLING of work that was
+            legitimately on-goal under two previous goals. GPT-4.1 is 0 days on
+            the second: the posture was there in its first message, so there
+            was never an on-goal phase. It also dissolves a false reading —
+            GPT-4.1's goal->onset looks like 13 days only because it joined the
+            village 13 days into an existing goal.
             evidence: a multi-day trace.  hours each, ~10-15 of them.
             table: episodes.jsonl
 
@@ -60,8 +71,16 @@ def slug(agent: str, day: str) -> str:
     return agent.lower().replace(" ", "-").replace(".", "-") + "__" + day
 
 
+# Fields only a human/Stage-2 pass can fill. The extractor rebuilds an episode
+# from the Stage-1 tables on every run, so without this it would silently wipe
+# them — which it would have done to activity_start on the very next run.
+STAGE2_FIELDS = ("activity_start", "activity_start_note", "onset", "onset_traced",
+                 "mechanism", "available_levers", "evidence", "goal", "goal_at")
+
+
 def build(dry=False):
     labels = _load(LABELS)
+    existing = {e["episode_id"]: e for e in _load(EPISODES)}
     audits = {(a["agent"], a["day"]): a for a in _load(AUDIT)}
     episodes, kept_audits = [], []
 
@@ -80,6 +99,8 @@ def build(dry=False):
                 "agent": a["agent"],
                 "onset": onset,
                 "onset_traced": onset is not None,
+                "activity_start": None,
+                "activity_start_note": None,
                 "seed_day": row["day"],          # the Stage-1 detection that anchored it
                 # every day actually examined, not just the seed: the timeline
                 # routinely reaches back weeks before it
@@ -101,6 +122,11 @@ def build(dry=False):
                 "verified_by": a.get("verified_by"),
                 "verified_at": a.get("verified_at"),
             })
+            # never clobber work a Stage-2 pass has already done
+            prior = existing.get(episodes[-1]["episode_id"], {})
+            for f in STAGE2_FIELDS:
+                if prior.get(f) not in (None, [], ""):
+                    episodes[-1][f] = prior[f]
             a = {**a, "turning_points": same}    # Stage-1 audit keeps same-day only
         kept_audits.append(a)
 
