@@ -83,12 +83,12 @@ tests/              unit + structural tests
 
 ## Output
 
-One JSON record per agent-day, plus a manifest recording the feature version and
-every constant used.
+One indented JSON file per village-day, holding an array of that day's agent-day
+records, plus a manifest recording the feature version and every constant used.
 
 ```
 samples/82-agent-days-2026-08-26..2026-08-28/
-    2026-08-26.jsonl
+    2026-08-26.json
     manifest.json
 ```
 

@@ -13,6 +13,8 @@ sweeps/
 # carry verbatim agent memory, session goals and chat from a gated dataset.
 # The synthetic fixture (samples/example_*, samples/make_sample.py) IS committed.
 samples/*/
+# Labelled data quotes agent memory/chat from a gated dataset — rebuild locally
+eval/*.jsonl
 
 __pycache__/
 *.pyc

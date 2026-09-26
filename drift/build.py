@@ -203,10 +203,12 @@ def write(records: list[dict], out_dir: str) -> None:
     by_day: dict[str, list[dict]] = defaultdict(list)
     for r in records:
         by_day[r["day"]].append(r)
+    # Indented JSON, not JSONL: a day is ~250KB, so streaming buys nothing and
+    # these files get read by hand. ensure_ascii=False keeps memory text legible.
     for day, rows in sorted(by_day.items()):
-        with open(os.path.join(out_dir, f"{day}.jsonl"), "w") as fh:
-            for r in rows:
-                fh.write(json.dumps(r) + "\n")
+        with open(os.path.join(out_dir, f"{day}.json"), "w", encoding="utf-8") as fh:
+            json.dump(rows, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
     manifest = {
         "feature_version": config.FEATURE_VERSION,
         "agent_days": len(records),
