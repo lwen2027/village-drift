@@ -55,7 +55,8 @@ def record(agent: str, day: str, *, claims, turning_points=(),
            sources=(), verified_by="claude-opus-5", verified_at="2026-09-26",
            new_reasoning=None, new_is_drift="unchanged", new_text=None,
            new_carry_over="unchanged", new_goal_is_open="unchanged",
-           new_goals=None, notes=None) -> dict:
+           new_goals=None, new_drift_onset="unchanged",
+           new_operator_corrections=None, notes=None) -> dict:
     """Append (or replace) the audit row for one agent-day, and sync the label."""
     for c in claims:
         if c["verdict"] not in VERDICTS:
@@ -105,6 +106,26 @@ def record(agent: str, day: str, *, claims, turning_points=(),
     if new_goal_is_open != "unchanged" and new_goal_is_open != row["goal_is_open"]:
         row["goal_is_open"] = new_goal_is_open
         changed.append("goal_is_open")
+    # When the divergence actually began. `start`/`end` are times on the row's
+    # own day; onset is a full timestamp and is routinely EARLIER than the row
+    # — Haiku's began 2026-07-06 16:06, a day before the sampled row. Without
+    # it, latency from goal assignment is unrecoverable, and every audit so far
+    # has established it only as free text inside a turning point.
+    #
+    # ⚠ Latency is NOT onset - goals[0].start. Anchor on whichever is later,
+    # the goal start or the agent's first active day under it: GPT-4.1 joined
+    # the village 13 days into a goal, so the raw difference would read as a
+    # 13-day-late drift when it began in its first hour.
+    if new_drift_onset != "unchanged" and new_drift_onset != row.get("drift_onset"):
+        row["drift_onset"] = new_drift_onset
+        changed.append("drift_onset")
+    # Was the agent told to go back to its goal, and did it? This separates
+    # "drifted and nobody noticed" from "drifted, was told plainly, carried on"
+    # — very different findings about the same behaviour. Each entry:
+    #   ts, text, kind (direct | automated-nudge), complied (True/False/"partial")
+    if new_operator_corrections is not None:
+        row["operator_corrections"] = new_operator_corrections
+        changed.append("operator_corrections")
     row["verified"] = True
     audit["label_changed"] = changed
 
