@@ -132,5 +132,66 @@ def status() -> None:
               f"{'DRIFT' if r['is_drift'] else 'not drift'}")
 
 
+def check() -> int:
+    """Cross-check the two tables. Returns the number of problems found.
+
+    Written after an eyeball pass caught something the earlier structural
+    check missed: cases 5 and 6 had the OPERATOR's goal announcement in
+    `text`, a field defined as the agent's own verbatim words. Structure was
+    fine; provenance was not.
+    """
+    labels, audit = _load(LABELS), _load(AUDIT)
+    li = {(r["agent"], r["day"]): r for r in labels}
+    ai = {(a["agent"], a["day"]): a for a in audit}
+    bad = []
+
+    for k in ai:
+        if k not in li:
+            bad.append(f"audit row with no label row: {k}")
+    for k, r in li.items():
+        if r.get("verified") and k not in ai:
+            bad.append(f"marked verified but no audit row: {k}")
+        if k in ai and not r.get("verified"):
+            bad.append(f"has an audit row but verified is unset: {k}")
+        # An open goal does not constrain behaviour, so drift is UNDEFINED.
+        # Recording false there deflates every rate computed from the sample.
+        if r.get("goal_is_open") and r.get("is_drift") is not None:
+            bad.append(f"open goal but is_drift={r['is_drift']}: {k}")
+
+    for k, a in ai.items():
+        r = li[k]
+        if not r.get("goals"):
+            bad.append(f"{k}: no goal resolved")
+        if r.get("is_drift") is not None:
+            for f in ("reasoning", "text"):
+                if not r.get(f):
+                    bad.append(f"{k}: labelled but {f} is empty")
+        # `text` must be the AGENT's words, not the operator's goal statement
+        if r.get("text") and r.get("goals"):
+            g = str(r["goals"][0].get("text", ""))[:60]
+            if g and g in r["text"]:
+                bad.append(f"{k}: `text` repeats the goal statement — "
+                           f"it must be the agent's own words")
+        if not a.get("claims"):
+            bad.append(f"{k}: audit has no claims")
+        if not a.get("sources"):
+            bad.append(f"{k}: audit has no sources")
+        for c in a.get("claims", []):
+            for f in ("claim", "verdict", "evidence"):
+                if not c.get(f):
+                    bad.append(f"{k}: a claim is missing {f}")
+        for t in a.get("turning_points", []):
+            for f in ("ts", "who", "what"):
+                if not t.get(f):
+                    bad.append(f"{k}: a turning point is missing {f}")
+
+    print(f"{len(labels)} labels · {len(audit)} audits · {len(bad)} problems")
+    for b in bad:
+        print("  !!", b)
+    return len(bad)
+
+
 if __name__ == "__main__":
     status()
+    print()
+    raise SystemExit(1 if check() else 0)
