@@ -135,6 +135,18 @@ def build(dry=False):
         r.pop("drift_onset", None)
         r.pop("operator_corrections", None)
 
+    # One-shot migration, not an idempotent build: it reads drift_onset and
+    # operator_corrections out of eval_100.jsonl and cross-day turning points
+    # out of verification.jsonl, all of which it then removes. Running it twice
+    # therefore finds nothing and would truncate episodes.jsonl to empty — which
+    # it did once. Refuse rather than destroy.
+    if len(episodes) < len(existing):
+        raise SystemExit(
+            f"refusing: would write {len(episodes)} episodes over {len(existing)} existing.\n"
+            f"The Stage-1 tables no longer hold the source fields; this script has "
+            f"already run. Edit episodes.jsonl directly, or restore the Stage-1 "
+            f"fields first.")
+
     if dry:
         print(f"would write {len(episodes)} episodes:")
         for e in episodes:
