@@ -22,7 +22,7 @@ Descriptive statistics, not findings.
 """
 
 SECTIONS = [
-    ("GOAL", ["assigned", "goal_is_open", "days_since_goal_change",
+    ("GOAL", ["assigned", "room", "goal_is_open", "days_since_goal_change",
               "goal_changes_in_baseline",
               "assigned_goal_words_present", "assigned_goal_words_missing"]),
     ("MEMORY", ["snapshots_today", "watchlist_persistence", "watchlist_provenance"]),

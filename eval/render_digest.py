@@ -28,7 +28,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from drift import config, load  # noqa: E402
+from drift import config, load, rooms as R  # noqa: E402
 
 CMD_CHARS = 160      # enough to see intent and redirect target
 OUT_CHARS = 120      # results, not intent
@@ -103,6 +103,8 @@ def digest(agent: str, day: str, data: dict, roster: set = frozenset()) -> str:
     A("Raw material. No detector has run on this; form your own view.")
     A("")
 
+    if data.get("room"):
+        A(f"room: {data['room']}   ({data.get('room_source')})")
     gs = data.get("goals") or ([data["goal"]] if data.get("goal") else [])
     if len(gs) > 1:
         A("## ASSIGNED GOAL — ⚠ CHANGED DURING THIS DAY")
@@ -222,6 +224,9 @@ def collect(days: set[tuple[str, str]]) -> dict:
     # shared-goal-era day, which was 33 of the 100 sampled: a third of the eval
     # set with no statement of what the agent was supposed to be doing.
     village = list(load._rows("village_goals.jsonl.gz"))
+    room_names = {r["id"]: r["name"] for r in load._rows("chat_rooms.jsonl.gz")}
+    observed = R.observed_rooms(load._rows("chat_messages.jsonl.gz"),
+                                agents, room_names)
 
     sess = {}
     for s in load._rows("computer_use_sessions.jsonl.gz"):
@@ -281,13 +286,29 @@ def collect(days: set[tuple[str, str]]) -> dict:
                 out[k]["memory"].append({"ts": m.get("created_at"),
                                          "content": m.get("content")})
 
+    # Resolve each agent-day's room BEFORE reading chat: during the split the
+    # rooms were access-isolated, so showing a #rest agent #best's conversation
+    # puts words in its digest it provably could not see.
+    prior: dict = {}
+    room_by: dict = {}
+    for (name, day) in sorted(days, key=lambda k: (k[0], k[1])):
+        rm, how = R.room_of(name, day, observed, prior)
+        room_by[(name, day)] = (rm, how)
+        if rm:
+            prior[name] = (rm, day)
+
     names = {a for a, _ in days}
     for c in load._rows("chat_messages.jsonl.gz"):
         day = str(c.get("created_at"))[:10]
+        rn = room_names.get(c.get("room_id"))
         speaker_id = c.get("agent_speaker_id")
         speaker = agents.get(speaker_id) or c.get("speaker_type") or "human"
         for name in names:
             if (name, day) in out:
+                mine = room_by.get((name, day), (None, None))[0]
+                # keep only the agent's own room during the split
+                if mine and rn and rn != mine and R.in_split(day):
+                    continue
                 out[(name, day)]["chat"].append({
                     "ts": c.get("created_at"), "speaker": speaker,
                     "own": speaker == name,
@@ -302,10 +323,16 @@ def collect(days: set[tuple[str, str]]) -> dict:
         aid = by_name.get(name)
         lo = str(d["turns"][0]["ts"]) if d["turns"] else day + " 00:00:00"
         hi = str(d["turns"][-1]["ts"]) if d["turns"] else day + " 23:59:59"
+        rm, how = room_by.get((name, day), (None, "unknown"))
+        d["room"], d["room_source"] = rm, how
         d["goals"] = (_in_force(goals.get(aid, []), lo, hi, "individual", "name")
                       or _in_force(village, lo, hi, "village", "goal"))
+        override = R.rest_goal(day) if rm == "rest" else None
+        if override:
+            d["goals"] = [{"text": override["text"], "scope": override["scope"],
+                           "start": override["start"], "end": override["end"]}]
         d["goal"] = d["goals"][0] if d["goals"] else None
-        d["goal_is_open"] = any(
+        d["goal_is_open"] = bool(override and override["is_open"]) or any(
             m in str(g.get("text", "")).lower()
             for g in d["goals"] for m in OPEN)
         # Active days this agent has worked since the assignment last changed.

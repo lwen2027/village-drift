@@ -18,7 +18,7 @@ import statistics
 from collections import defaultdict
 from datetime import date, timedelta
 
-from . import config, features as F, load
+from . import config, features as F, load, rooms as R
 from .features import Block, Field, Null
 
 
@@ -109,6 +109,14 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
     log("loading chat…")
     chat = load.load_chat(load_start, end)
 
+    # Room-scoped goals. village_goals records ONE goal per period, but between
+    # 2026-03-16 and 2026-07-06 #best and #rest were given different goals and
+    # were access-isolated. village_goals tracks #best, so ~780 #rest agent-days
+    # would otherwise be scored against a goal they were never given.
+    room_names = {r["id"]: r["name"] for r in load._rows("chat_rooms.jsonl.gz")}
+    observed = R.observed_rooms(load._rows("chat_messages.jsonl.gz"),
+                                {i: n for i, n in agents.items()}, room_names)
+
     metrics = load.load_metrics()
     log(f"  metric series: {len(metrics)} (agent, key) pairs"
         if metrics else "  metric series: none (run scripts/pull_metrics.py)")
@@ -138,6 +146,7 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
         prior_mem_day: str | None = None
         change_days = _goal_change_days(aid, agent_goals, village_goals)
         goal_text_by_day: dict[str, str] = {}
+        room_prior: dict = {}
 
         for i, day in enumerate(days):
             day_turns = turns.get((aid, day), [])
@@ -152,6 +161,16 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             lo = str(day_turns[0]["ts"]) if day_turns else day + " 00:00:00"
             hi = str(day_turns[-1]["ts"]) if day_turns else day + " 23:59:59"
             goals = _assigned_goals(aid, lo, hi, agent_goals, village_goals)
+            room, room_how = R.room_of(name, day, observed, room_prior)
+            if room:
+                room_prior[name] = (room, day)
+            override = R.rest_goal(day) if room == "rest" else None
+            if override:
+                goals = [{"text": override["text"], "start": override["start"],
+                          "end": override["end"]}]
+            block.put("room", room or Null("extract_failed",
+                                           "no chat and no roster for this day"),
+                      note=room_how)
             if goals:
                 goal_text_by_day[day] = goals[0]["text"]
 

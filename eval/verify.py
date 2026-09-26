@@ -54,7 +54,8 @@ def _write(path, rows):
 def record(agent: str, day: str, *, claims, turning_points=(),
            sources=(), verified_by="claude-opus-5", verified_at="2026-09-26",
            new_reasoning=None, new_is_drift="unchanged", new_text=None,
-           new_carry_over="unchanged", notes=None) -> dict:
+           new_carry_over="unchanged", new_goal_is_open="unchanged",
+           new_goals=None, notes=None) -> dict:
     """Append (or replace) the audit row for one agent-day, and sync the label."""
     for c in claims:
         if c["verdict"] not in VERDICTS:
@@ -94,6 +95,16 @@ def record(agent: str, day: str, *, claims, turning_points=(),
     if new_carry_over != "unchanged" and new_carry_over != row["carry_over"]:
         row["carry_over"] = new_carry_over
         changed.append("carry_over")
+    # The goal itself can be wrong. village_goals records ONE goal per period,
+    # but the village splits into rooms (#best, #rest) that are given DIFFERENT
+    # goals on the same day — so a shared-goal-era row can name a goal that was
+    # never in force for this agent.
+    if new_goals is not None:
+        row["goals"] = new_goals
+        changed.append("goals")
+    if new_goal_is_open != "unchanged" and new_goal_is_open != row["goal_is_open"]:
+        row["goal_is_open"] = new_goal_is_open
+        changed.append("goal_is_open")
     row["verified"] = True
     audit["label_changed"] = changed
 
