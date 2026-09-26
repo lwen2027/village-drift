@@ -54,7 +54,7 @@ def _write(path, rows):
 def record(agent: str, day: str, *, claims, turning_points=(),
            sources=(), verified_by="claude-opus-5", verified_at="2026-09-26",
            new_reasoning=None, new_is_drift="unchanged", new_text=None,
-           notes=None) -> dict:
+           new_carry_over="unchanged", notes=None) -> dict:
     """Append (or replace) the audit row for one agent-day, and sync the label."""
     for c in claims:
         if c["verdict"] not in VERDICTS:
@@ -87,6 +87,13 @@ def record(agent: str, day: str, *, claims, turning_points=(),
     if new_text:
         row["text"] = " ".join(new_text.split())
         changed.append("text")
+    # carry_over is set from the first-pass story, so a flip can leave it
+    # asserting a continuity the verification just disproved: GPT-5 2025-09-30
+    # kept carry_over=true after the HEXACO work turned out to be a same-day
+    # peer request rather than prior-goal residue.
+    if new_carry_over != "unchanged" and new_carry_over != row["carry_over"]:
+        row["carry_over"] = new_carry_over
+        changed.append("carry_over")
     row["verified"] = True
     audit["label_changed"] = changed
 
