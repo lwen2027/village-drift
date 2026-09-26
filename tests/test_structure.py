@@ -38,8 +38,10 @@ def make_fixture(dirpath):
     _write(dirpath, "agent_goals.jsonl.gz", [
         {"agent_id": AGENT, "name": "Maximize widgets",
          "start_time": "2026-08-01 00:00:00", "end_time": None}])
+    # village_goals stores its text under "goal", NOT "name" like agent_goals.
+    # The fixture used "name", so this path was never actually exercised.
     _write(dirpath, "village_goals.jsonl.gz", [
-        {"name": "Village goal", "start_time": "2026-01-01 00:00:00",
+        {"goal": "Village goal", "start_time": "2026-01-01 00:00:00",
          "end_time": None}])
     _write(dirpath, "chat_rooms.jsonl.gz", [])
 
@@ -221,3 +223,87 @@ def test_baseline_compares_like_for_like():
     assert b.facts["turns_vs_own_median"].value == 1.0, \
         "10 kept today vs a 10-kept baseline is a normal day"
     assert b.facts["turns_raw"].value == 100
+
+
+def test_goal_resolved_by_timestamp_not_date():
+    """Two goals can match the same DATE.
+
+    On 2026-06-23 the village goal switched from "Help Gemini 2.5 Pro!" to
+    "Beat the hardest game you can!" at 14:38. Matching on the date alone
+    returns both, and taking whichever the scan reaches first returns the
+    OUTGOING goal — which is how the eval renderer came to label that day
+    "Help Gemini 2.5 Pro!" when the taxonomy has it as the games goal.
+    """
+    from drift.build import _assigned_goals
+    vg = [{"goal": "Help Gemini 2.5 Pro!", "start_time": "2026-06-22 14:20:00",
+           "end_time": "2026-06-23 14:38:00"},
+          {"goal": "Beat the hardest game you can!",
+           "start_time": "2026-06-23 14:38:00", "end_time": "2026-06-29 09:22:00"}]
+    got = _assigned_goals(AGENT, "2026-06-23 16:00:00", "2026-06-23 23:59:00", [], vg)
+    assert [g["text"] for g in got] == ["Beat the hardest game you can!"]
+    # the previous working day is the OTHER one, not "whichever came first"
+    got = _assigned_goals(AGENT, "2026-06-22 16:00:00", "2026-06-22 23:59:00", [], vg)
+    assert [g["text"] for g in got] == ["Help Gemini 2.5 Pro!"]
+
+
+def test_straddling_day_returns_both_in_order():
+    """4 of 4,103 agent-days have turns on both sides of a change (all of them
+    2025-06-19). Naming only the incoming goal makes the morning's compliant
+    work read as off-goal."""
+    from drift.build import _assigned_goals
+    vg = [{"goal": "Write a story", "start_time": "2025-05-15 18:00:00",
+           "end_time": "2025-06-19 12:00:00"},
+          {"goal": "Holiday: do whatever you like!",
+           "start_time": "2025-06-19 12:00:00", "end_time": "2025-06-26 12:00:00"}]
+    got = _assigned_goals(AGENT, "2025-06-19 01:06:00", "2025-06-19 19:13:00", [], vg)
+    assert [g["text"] for g in got] == ["Write a story", "Holiday: do whatever you like!"]
+
+
+def test_individual_goal_beats_village_goal():
+    from drift.build import _assigned_goals
+    ag = [{"agent_id": AGENT, "name": "Maximize widgets",
+           "start_time": "2026-08-01 00:00:00", "end_time": None}]
+    vg = [{"goal": "Village goal", "start_time": "2026-01-01 00:00:00",
+           "end_time": None}]
+    got = _assigned_goals(AGENT, "2026-08-10 16:00:00", "2026-08-10 23:00:00", ag, vg)
+    assert [g["text"] for g in got] == ["Maximize widgets"]
+
+
+def test_open_goal_is_flagged_not_recorded_as_no_drift():
+    """You cannot drift from "do whatever you'd like". 262 agent-days (6%)."""
+    from drift.features import Block, goal_features
+    b = Block("A", "2026-02-16")
+    goal_features(b, [{"text": "Pick your own goal (agents bid 3.7 farewell)"}], None)
+    assert b.facts["goal_is_open"].value is True
+    b2 = Block("A", "2026-08-10")
+    goal_features(b2, [{"text": "Maximize widgets shipped"}], None)
+    assert b2.facts["goal_is_open"].value is False
+
+
+def test_goal_change_counters_are_recorded():
+    from drift.features import Block, goal_features
+    b = Block("A", "2026-06-23")
+    goal_features(b, [{"text": "Beat the hardest game you can!"}], None,
+                  since_change=0, changes_in_baseline=4)
+    assert b.facts["days_since_goal_change"].value == 0
+    assert b.facts["goal_changes_in_baseline"].value == 4
+    # pure table lookups — no regex or threshold, so not heuristic
+    assert not b.facts["days_since_goal_change"].heuristic
+    assert not b.facts["goal_is_open"].heuristic
+
+
+def test_history_strip_marks_where_the_assignment_changed():
+    """76% of 14-day windows cross a goal change. Unmarked, the judge reads
+    "yesterday a park clean-up, today chess" as a swerve, not an instruction."""
+    from drift.features import history_strip
+    prior = [("2026-06-16", "clean the park"), ("2026-06-17", "more park"),
+             ("2026-06-23", "play chess")]
+    goals = {"2026-06-16": "Adopt a park", "2026-06-17": "Adopt a park",
+             "2026-06-23": "Beat the hardest game you can!"}
+    out = history_strip(prior, goals.get)
+    joined = "\n".join(out)
+    assert "assigned goal is: Adopt a park" in joined
+    assert "assigned goal changed to: Beat the hardest game you can!" in joined
+    assert joined.index("changed to") < joined.index("2026-06-23  play chess")
+    # unchanged behaviour when no resolver is supplied
+    assert history_strip(prior) == [f"{d}  {g}" for d, g in prior]

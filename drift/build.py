@@ -47,21 +47,36 @@ def block_to_record(block: Block) -> dict:
     }
 
 
-def _assigned_goal(agent_id, day, agent_goals, village_goals) -> str | None:
-    """Individual goal if one covers the day, else the village goal."""
-    for row in reversed(agent_goals):
-        if row.get("agent_id") != agent_id:
-            continue
-        start = str(row.get("start_time") or "")[:10]
-        end = str(row.get("end_time") or "")[:10] or None
-        if start <= day and (end is None or day < end):
-            return row.get("name")
-    for row in reversed(village_goals):
-        start = str(row.get("start_time") or "")[:10]
-        end = str(row.get("end_time") or "")[:10] or None
-        if start <= day and (end is None or day < end):
-            return row.get("name") or row.get("goal")
-    return None
+def _assigned_goals(agent_id, lo: str, hi: str, agent_goals, village_goals) -> list:
+    """Every goal in force between this day's first and last turn.
+
+    Resolved against TIMESTAMPS, not the date. Two goals can match the same
+    date — on 2026-06-23 the village goal switched at 14:38 — and picking by
+    date alone returns whichever the scan reaches first, which is the OUTGOING
+    goal. Individual goals win over village goals; the result is chronological
+    and is almost always length 1 (4 of 4,103 agent-days straddle a change).
+    """
+    def covering(rows, key):
+        out = []
+        for r in rows:
+            start = str(r.get("start_time") or "")
+            end = str(r.get("end_time") or "") or None
+            if start <= hi and (end is None or end >= lo):
+                # village_goals stores its text under "goal", agent_goals "name"
+                out.append({"text": r.get(key) or r.get("goal") or r.get("name"),
+                            "start": r.get("start_time"), "end": r.get("end_time")})
+        return sorted(out, key=lambda g: str(g["start"]))
+
+    mine = [r for r in agent_goals if r.get("agent_id") == agent_id]
+    return covering(mine, "name") or covering(village_goals, "goal")
+
+
+def _goal_change_days(agent_id, agent_goals, village_goals) -> list[str]:
+    """Dates on which the assignment changed, for this agent."""
+    d = {str(r["start_time"])[:10] for r in village_goals if r.get("start_time")}
+    d |= {str(r["start_time"])[:10] for r in agent_goals
+          if r.get("agent_id") == agent_id and r.get("start_time")}
+    return sorted(d)
 
 
 def build(start: str | None = None, end: str | None = None, verbose=True) -> list[dict]:
@@ -121,6 +136,8 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
         first_seen: dict[str, str] = {}
         prior_last_goals: list[tuple[str, str]] = []
         prior_mem_day: str | None = None
+        change_days = _goal_change_days(aid, agent_goals, village_goals)
+        goal_text_by_day: dict[str, str] = {}
 
         for i, day in enumerate(days):
             day_turns = turns.get((aid, day), [])
@@ -132,15 +149,32 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             mem_today = memory.get((aid, day))
             mem_prior = memory.get((aid, prior_mem_day)) if prior_mem_day else None
 
+            lo = str(day_turns[0]["ts"]) if day_turns else day + " 00:00:00"
+            hi = str(day_turns[-1]["ts"]) if day_turns else day + " 23:59:59"
+            goals = _assigned_goals(aid, lo, hi, agent_goals, village_goals)
+            if goals:
+                goal_text_by_day[day] = goals[0]["text"]
+
+            # Active days since the assignment last changed. At 0-1 a day that
+            # looks nothing like yesterday is COMPLIANCE, not drift — 26% of the
+            # corpus sits there, and 34% of the shared-goal era.
+            recent = [c for c in change_days if c <= day]
+            since = (sum(1 for d in days[:i] if d >= recent[-1]) if recent else None)
+            prior = days[max(0, i - config.BASELINE_DAYS) : i]
+            crossed = (sum(1 for c in change_days if prior[0] < c <= day)
+                       if prior else None)
+
             F.goal_features(
-                block,
-                _assigned_goal(aid, day, agent_goals, village_goals),
+                block, goals,
                 mem_today["last_content"] if mem_today else None,
+                since_change=since, changes_in_baseline=crossed,
             )
             F.memory_features(block, mem_today, mem_prior, prior_mem_day, first_seen)
 
-            # baseline from this agent's own prior ACTIVE days
-            prior = days[max(0, i - config.BASELINE_DAYS) : i]
+            # baseline from this agent's own prior ACTIVE days.
+            # NOT clipped at goal boundaries: shared-era goals last ~5 active
+            # days, so a within-goal baseline would be null for most of the
+            # corpus. goal_changes_in_baseline says how much to trust it.
             baseline = None
             if len(prior) >= config.BASELINE_DAYS:
                 # Same predicate as the numerator — see features.kept_turns
@@ -161,7 +195,8 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             block.context["prior_snapshot_outline"] = (
                 F.memory_outline(mem_prior["last_content"]) if mem_prior else []
             )
-            block.context["prior_active_days"] = F.history_strip(prior_last_goals)
+            block.context["prior_active_days"] = F.history_strip(
+                prior_last_goals, goal_text_by_day.get)
 
             in_window = (start is None or day >= start) and (end is None or day <= end)
             if in_window:   # lookback/spillover days feed state only

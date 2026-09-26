@@ -22,7 +22,9 @@ Descriptive statistics, not findings.
 """
 
 SECTIONS = [
-    ("GOAL", ["assigned", "assigned_goal_words_present", "assigned_goal_words_missing"]),
+    ("GOAL", ["assigned", "goal_is_open", "days_since_goal_change",
+              "goal_changes_in_baseline",
+              "assigned_goal_words_present", "assigned_goal_words_missing"]),
     ("MEMORY", ["snapshots_today", "watchlist_persistence", "watchlist_provenance"]),
     ("ASSIGNED-METRIC", ["metric_key", "metric_source", "metric_datapoints_all_time",
                          "metric_last_value", "metric_slope_7d",

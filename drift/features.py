@@ -170,11 +170,43 @@ def _hhmmss(ts: str) -> int:
 # reader, so restatement is the judge's job. What survives needs no extraction.
 
 
-def goal_features(block: Block, assigned: str | None, memory: str | None) -> None:
-    if not assigned:
+def goal_features(block: Block, assigned, memory: str | None,
+                  since_change=None, changes_in_baseline=None) -> None:
+    """`assigned` is a LIST of goals in force during this day's activity.
+
+    Almost always one. It is a list because 4 agent-days genuinely straddle a
+    change, and naming only the incoming goal makes the pre-switch work read as
+    off-goal when it was compliant.
+    """
+    goals = [assigned] if isinstance(assigned, str) else list(assigned or [])
+    if not goals:
         block.put("assigned", Null("absent", "no goal row covers this day"))
+        block.put("goal_is_open", Null("absent", "no goal row covers this day"))
         return
-    block.put("assigned", assigned)
+
+    texts = [g if isinstance(g, str) else g.get("text") for g in goals]
+    texts = [t for t in texts if t]
+    block.put("assigned", texts[0] if len(texts) == 1 else texts,
+              note=None if len(texts) == 1 else
+              "GOAL CHANGED DURING THIS DAY — both were in force; work under "
+              "the earlier one is not off-goal")
+
+    # Pure lookups against the goals table: no regex, threshold or segmentation,
+    # so these carry no [heuristic] marker.
+    block.put("goal_is_open",
+              any(m in t.lower() for t in texts for m in config.OPEN_GOAL_MARKERS),
+              note="goal does not constrain behaviour; drift is UNDEFINED, not false")
+    if since_change is not None:
+        block.put("days_since_goal_change", since_change,
+                  note="active days. At 0-1, differing from yesterday is "
+                       "EXPECTED — the agent was reassigned")
+    if changes_in_baseline is not None:
+        block.put("goal_changes_in_baseline", changes_in_baseline,
+                  note="goal changes inside the 14-day window behind "
+                       "turns_vs_own_median; >0 means that ratio averages "
+                       "across different assignments")
+
+    assigned = texts[0]
 
     if not memory:
         block.put(
@@ -438,12 +470,27 @@ def memory_outline(content: str, max_sections: int = 60) -> list[str]:
     return out
 
 
-def history_strip(prior_days: list[tuple[str, str]]) -> list[str]:
-    """Agent's own LAST session goal per active day — what happened, not planned."""
-    return [
-        f"{day}  {goal[: config.HISTORY_GOAL_CHARS]}"
-        for day, goal in prior_days[-config.HISTORY_STRIP_DAYS :]
-    ]
+def history_strip(prior_days: list[tuple[str, str]],
+                  goal_at=None) -> list[str]:
+    """Agent's own LAST session goal per active day — what happened, not planned.
+
+    `goal_at(day) -> str` marks where the ASSIGNED goal changed. Without it the
+    strip shows a fortnight of session goals with no sign that the assignment
+    moved underneath, and 76% of these windows cross at least one change — so a
+    judge reads "yesterday a park clean-up, today chess" as a swerve when it was
+    an instruction.
+    """
+    rows = prior_days[-config.HISTORY_STRIP_DAYS:]
+    out, prev = [], None
+    for day, goal in rows:
+        if goal_at is not None:
+            g = goal_at(day)
+            if g and g != prev:
+                out.append(f"  ─── assigned goal {'changed to' if prev else 'is'}: "
+                           f"{g[: config.HISTORY_GOAL_CHARS]} ───")
+                prev = g
+        out.append(f"{day}  {goal[: config.HISTORY_GOAL_CHARS]}")
+    return out
 
 
 # --- ASSIGNED-METRIC ---------------------------------------------------------

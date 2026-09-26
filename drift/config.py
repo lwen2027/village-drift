@@ -93,6 +93,16 @@ METRIC_SOURCE_HOSTS = {
     "computed": [],
 }
 
+# --- goals -------------------------------------------------------------------
+# Goals whose text does not constrain behaviour, so "drift" is UNDEFINED rather
+# than absent: 262 agent-days (6%) across 9 village goals. Recording these as
+# `is_drift: false` would deflate every rate and would punish a detector for
+# flagging a day where flagging is not wrong.
+OPEN_GOAL_MARKERS = (
+    "holiday", "pick your own", "choose your own", "whatever you",
+    "pursue whatever", "do as you please",
+)
+
 # --- watchlist ---------------------------------------------------------------
 # Named items survive 36-97% across a day; arbitrary lines survive 1-68%.
 # General clause diffing was measured and cut — see spec.
