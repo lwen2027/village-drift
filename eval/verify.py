@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LABELS = os.path.join(HERE, "eval_100.jsonl")
@@ -79,6 +80,21 @@ def _write(path, rows):
     with open(path, "w") as fh:
         for r in rows:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def _paragraphs(s: str) -> str:
+    """Collapse whitespace WITHIN paragraphs, keep the blank line BETWEEN them.
+
+    `reasoning` was stored through `" ".join(s.split())`, which flattened every
+    one of these to a single block — case 16 came out as 1334 characters with
+    zero newlines. The argument has a shape (verdict, evidence, what does not
+    count, day-scoped conclusion) and the shape is worth reading.
+
+    Collapsing inside a paragraph still matters: these are written as indented
+    Python string literals, so every line arrives with leading spaces.
+    """
+    paras = re.split(r"\n\s*\n", s.strip())
+    return "\n\n".join(" ".join(p.split()) for p in paras if p.strip())
 
 
 def record(agent: str, day: str, *, claims, turning_points=(),
@@ -115,7 +131,7 @@ def record(agent: str, day: str, *, claims, turning_points=(),
         row["is_drift"] = new_is_drift
         changed.append("is_drift")
     if new_reasoning:
-        row["reasoning"] = " ".join(new_reasoning.split())
+        row["reasoning"] = _paragraphs(new_reasoning)
         changed.append("reasoning")
     if new_text:
         row["text"] = " ".join(new_text.split())
