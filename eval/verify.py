@@ -66,8 +66,9 @@ import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LABELS = os.path.join(HERE, "eval_100.jsonl")
-AUDIT = os.path.join(HERE, "verification.jsonl")
+TABLES = os.path.join(HERE, "tables")
+LABELS = os.path.join(TABLES, "eval_100.jsonl")
+AUDIT = os.path.join(TABLES, "verification.jsonl")
 
 
 def _load(path):

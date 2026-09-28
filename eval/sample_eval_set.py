@@ -48,8 +48,15 @@ def blank_row(src: dict, source: str) -> dict:
     """An eval row: the shared schema, with the train-only block nulled.
 
     Deliberately empty of anything a labeller could anchor on. The monitor's
-    verdict is joined in AFTERWARDS by enrich_monitor.py — showing it here would
-    destroy the comparison it exists to support.
+    verdict is NOT carried here at all — not even as a null placeholder.
+    enrich_monitor.py writes it to a file outside the repo, because the
+    comparison only means anything if the labeller never saw it.
+
+    ⚠ The placeholder keys used to live here and were removed. Three separate
+    times a labelling subagent found the monitor anyway: once from these fields
+    on the eval rows, once by opening eval/monitor.jsonl directly, and once from
+    the key list of eval/tables/train_23.jsonl. Empty keys still telegraph that a
+    verdict exists and where to look for it. Do not add them back.
     """
     return {
         "agent": src["agent"],
@@ -67,10 +74,6 @@ def blank_row(src: dict, source: str) -> dict:
         "digest_sha": None,
         "label_confidence": None,
         "label_minutes": None,
-
-        "monitor_flagged": None,
-        "monitor_severity": None,
-        "monitor_heading": None,
 
         # stratification attributes, kept for analysis of WHERE arms fail
         "era": src["era"],
@@ -103,8 +106,8 @@ def main() -> None:
     p.add_argument("--n-unmonitored", type=int, default=20,
                    help="days it never ran on; the only place FNs are visible")
     p.add_argument("--seed", type=int, required=True, help="record this in the PR")
-    p.add_argument("--train", default="eval/train_23.jsonl")
-    p.add_argument("--out", default="eval/eval_100.jsonl")
+    p.add_argument("--train", default="eval/tables/train_23.jsonl")
+    p.add_argument("--out", default="eval/tables/eval_100.jsonl")
     p.add_argument("--cache", default="data/frame.json")
     p.add_argument("--cutoff", default=None,
                    help="last day to consider; defaults to the dump's coverage")

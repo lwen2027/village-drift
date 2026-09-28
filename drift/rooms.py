@@ -115,7 +115,17 @@ def room_of(agent: str, day: str, observed: dict, prior: dict | None = None):
     fallback for days the agent stayed silent, not the primary.
     """
     if not in_split(day):
-        return "general", "single-room era"
+        # Observed chat still wins outside the split window. Returning "general"
+        # unconditionally here was wrong: #focus was created 2026-08-05, a month
+        # after the split closed, and agents used it heavily — on 2026-08-11 one
+        # agent posted 89 of 122 messages there and on 2026-08-13 another posted
+        # 153 of 154, while this function reported "general" for both. No goal
+        # attaches to #focus, so the room does not change the assignment; the
+        # field was simply asserting something false.
+        c = observed.get((agent, day))
+        if c:
+            return max(c, key=lambda k: (c[k], k)), "observed in chat"
+        return "general", "single-room era (no chat this day)"
     c = observed.get((agent, day))
     if c:
         # max(), not Counter.most_common(), so a plain dict works too

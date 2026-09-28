@@ -74,9 +74,24 @@ def test_carry_forward_is_last_resort():
     assert room is None and "changes the goal" in how, "never guess a room"
 
 
-def test_outside_the_split_there_is_one_room():
+def test_outside_the_split_observed_chat_still_wins():
+    """Outside the split window the default is #general — but only as a default.
+
+    This used to return ("general", "single-room era") unconditionally, which
+    was wrong: #focus was created 2026-08-05, a month after the split closed,
+    and agents used it heavily. On 2026-08-11 one agent posted 89 of its 122
+    messages there and on 2026-08-13 another posted 153 of 154, while this
+    function reported "general" for both. No goal attaches to #focus, so the
+    room does not change the assignment — the field was simply asserting
+    something false.
+    """
+    # No chat that day: fall back to the default, and say so.
     room, how = R.room_of("anyone", "2025-10-21", {})
-    assert (room, how) == ("general", "single-room era")
+    assert room == "general" and how.startswith("single-room era")
+
+    # Chat exists: it wins, even outside the split window.
+    observed = {("anyone", "2026-08-13"): {"focus": 153, "general": 1}}
+    assert R.room_of("anyone", "2026-08-13", observed) == ("focus", "observed in chat")
 
 
 def test_goal_override_applies_only_to_rest():

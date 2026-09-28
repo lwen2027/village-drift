@@ -1,8 +1,17 @@
-"""Attach the existing monitor's verdict to each labelled agent-day.
+"""Record the existing monitor's verdict for each labelled agent-day.
 
 This is the incumbent baseline arm. It MUST stay hidden from whoever labels —
 seeing it would anchor the label and destroy the comparison. It is joined in
 afterwards, purely for scoring.
+
+⚠ IT WAS NOT HIDDEN. Until 2026-09-28 these three fields lived on every row of
+eval_100.jsonl, which is the file auditors read to find their case. Two
+subagents quoted their own row's monitor_heading back in their reports, so the
+leak is demonstrated, not hypothetical, and it applies to ALL audits before that
+date — not only the batches where I stated the verdict in the brief.
+
+They now live in eval/monitor.jsonl, joined on (agent, day). Do not merge them
+back into the label table.
 
     export DATABASE_URI='postgresql://…'
     python3 eval/enrich_monitor.py
@@ -21,8 +30,12 @@ RANK = {"high": 3, "medium": 2, "low": 1}
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--labels", default="eval/train_23.jsonl",
-                   help="works on either train_23.jsonl or eval_set.jsonl")
+    p.add_argument("--labels", default="eval/tables/train_23.jsonl",
+                   help="rows to key on; the verdict is written to --out, never back")
+    p.add_argument("--out", default=os.path.expanduser("~/village-drift-monitor/monitor.jsonl"),
+                   help="OUTSIDE the repo. Auditors are pointed at /Users/lwen/village-drift "
+                        "and will read anything inside it — one did, from eval/monitor.jsonl, "
+                        "after the fields were moved off the label rows. Keep it out of reach.")
     a = p.parse_args()
     uri = os.environ.get("DATABASE_URI")
     if not uri:
@@ -44,12 +57,12 @@ def main() -> None:
     for line in open(a.labels):
         rec = json.loads(line)
         m = best.get((rec["agent"], rec["day"]))
-        rec["monitor_flagged"] = m is not None
-        rec["monitor_severity"] = m["severity"] if m else None
-        rec["monitor_heading"] = m["heading"] if m else None
         hit += m is not None
-        out.append(rec)
-    with open(a.labels, "w") as fh:
+        out.append({"agent": rec["agent"], "day": rec["day"],
+                    "monitor_flagged": m is not None,
+                    "monitor_severity": m["severity"] if m else None,
+                    "monitor_heading": m["heading"] if m else None})
+    with open(a.out, "w") as fh:
         for r in out:
             fh.write(json.dumps(r) + "\n")
     print(f"{len(out)} rows · {hit} carry an off-goal finding · "

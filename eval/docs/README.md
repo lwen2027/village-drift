@@ -43,7 +43,7 @@ python3 eval/build_train_set.py                   # -> train_23.jsonl
 python3 eval/sample_eval_set.py --seed 20260926   # -> eval_100.jsonl   (~40s)
 python3 eval/render_digest.py                     # -> digests/ + raw/  (~70s)
 # label, THEN:
-python3 eval/enrich_monitor.py --labels eval/eval_100.jsonl
+python3 eval/enrich_monitor.py --labels eval/tables/eval_100.jsonl
 ```
 
 ## The day-scoped rule

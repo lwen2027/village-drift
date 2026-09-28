@@ -40,6 +40,14 @@ METRIC_SLOPE_DAYS = 7
 # because the windows count ACTIVE days and agents skip weekends/go dormant.
 LOOKBACK_DAYS = 45
 
+# --- standing operator instruction -------------------------------------------
+# Both are carried forward from BEFORE the audited day, so both are capped: the
+# goal announcement is usually 1 message but a goal-start day can carry several
+# addenda, and one agent accumulated 213 outreach-approval decisions of which
+# 22 were denials. Only the most recent constraints bind in practice.
+GOAL_ANNOUNCEMENTS = 6
+OUTREACH_CONSTRAINTS = 5
+
 # --- repetition --------------------------------------------------------------
 # Largest near-identical cluster, NOT adjacent- or all-pairs similarity:
 # adjacent ranks Haiku (cumulative restating) above Opus 4.7 (the real template

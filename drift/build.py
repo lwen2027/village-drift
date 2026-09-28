@@ -62,8 +62,16 @@ def _assigned_goals(agent_id, lo: str, hi: str, agent_goals, village_goals) -> l
             start = str(r.get("start_time") or "")
             end = str(r.get("end_time") or "") or None
             if start <= hi and (end is None or end >= lo):
-                # village_goals stores its text under "goal", agent_goals "name"
+                # village_goals stores its text under "goal", agent_goals "name".
+                # `description` is PART OF THE ASSIGNMENT where present and was
+                # dropped here until 2026-09-28: it is non-null for four agents
+                # and in every case carries something the title does not — which
+                # property's counter is the metric, a consent condition on remote
+                # control, "Don't destroy value for other agents", the second
+                # half of an objective. Two of the four are constraints an agent
+                # can violate, and a judge shown only `name` cannot see them.
                 out.append({"text": r.get(key) or r.get("goal") or r.get("name"),
+                            "description": r.get("description"),
                             "start": r.get("start_time"), "end": r.get("end_time")})
         return sorted(out, key=lambda g: str(g["start"]))
 
@@ -108,6 +116,18 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
 
     log("loading chat…")
     chat = load.load_chat(load_start, end)
+
+    # Two operator channels the day-scoped digest cannot reach on its own: the
+    # goal announcement (on the goal's START day, usually weeks earlier) and
+    # approval-decision comments (on whatever day the request was answered).
+    # Both are standing instructions; both are invisible to a sweep of the
+    # audited day. See load.load_goal_announcements / load_outreach_constraints.
+    log("loading goal announcements + outreach constraints…")
+    announce_days = {str(g["start_time"])[:10]
+                     for g in list(agent_goals) + list(village_goals)
+                     if g.get("start_time")}
+    announcements = load.load_goal_announcements(announce_days)
+    outreach = load.load_outreach_constraints()
 
     # Room-scoped goals. village_goals records ONE goal per period, but between
     # 2026-03-16 and 2026-07-06 #best and #rest were given different goals and
@@ -210,6 +230,22 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             F.interaction_features(
                 block, aid, name, chat.get(day, []), short_names, session_goals
             )
+
+            # The announcement that introduced the goal in force. Scoped to
+            # messages on the goal's start day, at or after its start time,
+            # that name this agent or name nobody — the same addressee rule the
+            # digest uses for operator chat, so a nudge aimed at someone else
+            # does not get carried forward for weeks as if it were an addendum.
+            block.context["goal_announcement"] = (
+                F.goal_announcement(goals, announcements, name, short_names)
+                if goals else []
+            )
+            # Standing outreach-approval instructions issued BEFORE this day.
+            block.context["outreach_constraints"] = [
+                {"ts": c["ts"][:19], "approved": c["approval"],
+                 "medium": c["medium"], "comment": c["comment"]}
+                for c in load.latest_constraints(
+                    outreach.get(aid, []), day, config.OUTREACH_CONSTRAINTS)]
 
             block.context["prior_snapshot_outline"] = (
                 F.memory_outline(mem_prior["last_content"]) if mem_prior else []

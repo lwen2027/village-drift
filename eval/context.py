@@ -98,8 +98,23 @@ def room_for(agent: str, day: str, D=None):
     return R.room_of(agent, day, D["observed"])
 
 
-def operator_messages(agent: str, day: str, D=None) -> list:
-    """Operator messages naming this agent on this day.
+NUDGER_OFF = "2026-08-20 17:51:20"   # operator: "I'm disabling the auto-nudger
+# for now, and I'll think about a better long-term solution." Measured volume:
+# 22-25 nudges/day through 08-19, 5 on 08-20, then 0 on every later day. Before
+# this instant an absence of nudges is weak evidence that a transcript-reading
+# detector looked at the day and did not flag it; after it, an absence means
+# nothing at all, and `nudges` must not be reported as 0.
+
+
+def operator_messages(agent: str, day: str, day_only=False, D=None) -> list:
+    """Operator messages naming this agent on this day — plus broadcasts.
+
+    A message naming NO agent is kept: the operator addresses the whole village
+    sometimes, and those carry real instruction — the 2026-08-12 16:00:51 post
+    is an explicit "check whether your recent approach is actually a good way
+    of optimizing for your goal… and not some other thing", which 26 agents
+    answered within 90 minutes. Filtering to named-only returned zero for it.
+    Each entry carries `addressed` so the two can still be told apart.
 
     ⚠ A nudge quotes "recent activity" and the nudger reads the whole recent
     transcript, so one arriving early in the agent's day is a statement about
@@ -111,7 +126,7 @@ def operator_messages(agent: str, day: str, D=None) -> list:
     rather than stored precisely so it is not mistaken for a label.
     """
     D = D or _dump()
-    pat = _named(agent)
+    roster = [n for n in D["agents"].values() if n]
     out = []
     for c in D["chat"]:
         if c.get("agent_speaker_id"):
@@ -119,11 +134,15 @@ def operator_messages(agent: str, day: str, D=None) -> list:
         if str(c.get("created_at"))[:10] != day:
             continue
         t = " ".join(str(c.get("content") or "").split())
-        if not pat.search(t):
-            continue
+        named = [a for a in roster if _named(a).search(t)]
+        if named and agent not in named:
+            continue          # addressed only to other agents
+        if not named and day_only:
+            continue          # caller wants addressed messages only
         m = NUDGE.search(t)
         out.append({"ts": str(c["created_at"])[:19],
                     "kind": "automated-nudge" if m else "direct",
+                    "addressed": agent in named,
                     "trigger": m.group(1) if m else None,
                     "room": D["rooms"].get(c.get("room_id")),
                     "msg_id": c["id"], "text": t[:300]})
@@ -149,7 +168,15 @@ def context_for(agent: str, day: str) -> dict:
                                    if prev else None),
         "room": room, "room_source": how,
         "operator_messages": msgs,
-        "nudges": sum(1 for m in msgs if m["kind"] == "automated-nudge"),
+        # Null-with-reason rather than 0 once the instrument is off: see
+        # NUDGER_OFF. A 0 here would otherwise read as "the idler saw this day
+        # and did not flag it", which is exactly backwards after 2026-08-20.
+        "nudges": (sum(1 for m in msgs
+                       if m["kind"] == "automated-nudge" and m["addressed"])
+                   if day + " 23:59:59" < NUDGER_OFF else None),
+        "nudges_null_reason": (None if day + " 23:59:59" < NUDGER_OFF else
+                               "auto-nudger disabled 2026-08-20 17:51:20 — "
+                               "absence of nudges carries no information"),
     }
 
 

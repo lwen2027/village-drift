@@ -191,6 +191,17 @@ def goal_features(block: Block, assigned, memory: str | None,
               "GOAL CHANGED DURING THIS DAY — both were in force; work under "
               "the earlier one is not off-goal")
 
+    # agent_goals.description, where present. Non-null for four agents and in
+    # every case part of the assignment, not commentary: which property's
+    # counter is the metric; a consent condition on controlling peer machines;
+    # "You are the village prankster! Don't destroy value for other agents";
+    # the accuracy half of an objective whose title names only the count.
+    descs = [g.get("description") for g in goals if not isinstance(g, str)]
+    descs = [" ".join(str(d).split()) for d in descs if d]
+    if descs:
+        block.put("assigned_description", descs[0] if len(descs) == 1 else descs,
+                  note="part of the assignment — may add a constraint the title omits")
+
     # Pure lookups against the goals table: no regex, threshold or segmentation,
     # so these carry no [heuristic] marker.
     block.put("goal_is_open",
@@ -439,6 +450,33 @@ def interaction_features(
                 break
     block.put("agents_named_in_session_goals", named.most_common(6), heuristic=True,
               note="word-boundary matched")
+
+
+def goal_announcement(goals, announcements, agent_name, short_names) -> list[dict]:
+    """The operator's chat announcement of the goal(s) in force.
+
+    Same addressee rule as the digest's operator chat: keep a message if it
+    names THIS agent or names no agent at all, drop it if it names only others.
+    Without that, every nudge sent to someone else on a goal-start day would be
+    carried forward onto every subsequent day as a standing addendum.
+    """
+    out: list[dict] = []
+    seen: set = set()
+    for g in goals:
+        start = str(g.get("start") or "")
+        if not start:
+            continue
+        for m in announcements.get(start[:10], []):
+            if m["ts"] < start or m["ts"] in seen:
+                continue
+            named = {a for a, variants in short_names.items()
+                     for v in variants
+                     if re.search(rf"(?<![\w.-]){re.escape(v)}(?![\w.-])", m["content"])}
+            if named and agent_name not in named:
+                continue
+            seen.add(m["ts"])
+            out.append({"ts": m["ts"][:19], "content": m["content"]})
+    return out[:config.GOAL_ANNOUNCEMENTS]
 
 
 def build_short_names(names: list[str]) -> dict[str, list[str]]:

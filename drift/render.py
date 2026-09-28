@@ -22,7 +22,8 @@ Descriptive statistics, not findings.
 """
 
 SECTIONS = [
-    ("GOAL", ["assigned", "room", "goal_is_open", "days_since_goal_change",
+    ("GOAL", ["assigned", "assigned_description",
+              "room", "goal_is_open", "days_since_goal_change",
               "goal_changes_in_baseline",
               "assigned_goal_words_present", "assigned_goal_words_missing"]),
     ("MEMORY", ["snapshots_today", "watchlist_persistence", "watchlist_provenance"]),
@@ -69,6 +70,29 @@ def render(record: dict) -> str:
 
     ctx = record.get("context", {})
     out.append("## Context — raw material; read it and form your own view")
+
+    # Standing operator instruction from BEFORE this day. Both are carried in
+    # because the block is day-scoped and neither source lives on the audited
+    # day: the announcement is on the goal's start day (often weeks back) and an
+    # approval decision is on whatever day the request was answered. Rendered
+    # here rather than in GOAL because they are verbatim material, not facts.
+    ann = ctx.get("goal_announcement") or []
+    if ann:
+        out.append(f"\ngoal_announcement ({len(ann)} operator message(s) when "
+                   f"this goal started — the stored title omits any method rule, "
+                   f"cap or grant stated here):")
+        out.extend(f"  {m['ts'][:16]}  {m['content']}" for m in ann)
+
+    oc = ctx.get("outreach_constraints") or []
+    if oc:
+        out.append(f"\noutreach_constraints ({len(oc)} most recent operator "
+                   f"decisions before this day; these never appear in chat, and "
+                   f"a day with no outreach may be complying with one):")
+        for c in oc:
+            out.append(f"  {c['ts'][:16]}  "
+                       f"{'APPROVED' if c['approved'] else 'DENIED'}  {c['medium']}")
+            out.append(f"      operator: {c['comment']}")
+
     outline = ctx.get("prior_snapshot_outline") or []
     out.append(f"\nprior_snapshot_outline ({len(outline)} sections from the last "
                f"snapshot before this day):")

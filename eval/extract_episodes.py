@@ -50,9 +50,10 @@ import os
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LABELS = os.path.join(HERE, "eval_100.jsonl")
-AUDIT = os.path.join(HERE, "verification.jsonl")
-EPISODES = os.path.join(HERE, "episodes.jsonl")
+TABLES = os.path.join(HERE, "tables")
+LABELS = os.path.join(TABLES, "eval_100.jsonl")
+AUDIT = os.path.join(TABLES, "verification.jsonl")
+EPISODES = os.path.join(TABLES, "episodes.jsonl")
 
 
 def _load(p):

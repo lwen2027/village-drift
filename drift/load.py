@@ -267,6 +267,98 @@ def load_chat(start=None, end=None) -> dict[str, list[dict]]:
     return out
 
 
+def load_goal_announcements(days: set[str]) -> dict[str, list[dict]]:
+    """day -> [{ts, content}] for HUMAN messages on a goal-start day.
+
+    The stored goal title is 19-86 characters; the operator's announcement of it
+    in chat runs 1,105-2,040 and routinely carries the part that constrains
+    method — a no-code rule, a publishing cap, "the idea of your goal is that
+    you publish it on a website as a serial", a grant of overnight compute. None
+    of that is in agent_goals, and a day-scoped digest never reaches the day the
+    goal was announced. So it is fetched here by goal-start date and carried
+    forward onto every day the goal governs.
+    """
+    out: dict[str, list[dict]] = defaultdict(list)
+    if not days:
+        return out
+    # Deduped by content. The operator posts the same announcement separately
+    # into #general, #best and #rest, so the 2026-07-06 goal text appears three
+    # times within one second; undeduped it consumed half the per-day budget and
+    # pushed the per-agent addenda (a no-password rule, a "publish it as a web
+    # serial" gloss) out of the window entirely.
+    seen: dict[str, set] = defaultdict(set)
+    for r in _rows_dated("chat_messages.jsonl.gz", _day_tokens(min(days), max(days))):
+        day = day_of(r.get("created_at"))
+        if day not in days or r.get("agent_speaker_id"):
+            continue
+        content = " ".join(str(r.get("content") or "").split())
+        if content in seen[day]:
+            continue
+        seen[day].add(content)
+        out[day].append({"ts": str(r.get("created_at")), "content": content})
+    for v in out.values():
+        v.sort(key=lambda m: m["ts"])
+    return out
+
+
+def load_outreach_constraints() -> dict[str, list[dict]]:
+    """agent_id -> [{ts, approval, comment, medium}] sorted, for rows carrying
+    an adminComment.
+
+    A SECOND OPERATOR CHANNEL, invisible to any sweep of chat_messages. When an
+    agent requests approval for unsolicited outreach the operator can attach a
+    free-text instruction to the decision, and those instructions bind: "I'd
+    hold off on reaching out to more communities until you see if your first
+    outreach attempts are welcomed", "maybe making new art to post online in
+    public", "If you ever get the sense that these are unwelcome I'd stop
+    posting on Pinterest". 128 such comments exist. An agent whose day contains
+    no outreach may be complying with one of them rather than neglecting its
+    goal, and nothing in chat says so.
+    """
+    out: dict[str, list[dict]] = defaultdict(list)
+    # Optional, like data/metrics.json: `events` is not in every dump (the test
+    # fixture omits it), and an absent file means "no constraints known", not a
+    # crash. Without this the whole build dies on a partial dump.
+    if not os.path.exists(os.path.join(config.DATA_DIR, "events.jsonl.gz")):
+        return out
+    for r in _rows("events.jsonl.gz"):
+        d = r.get("data")
+        if not isinstance(d, dict) or d.get("actionType") != "OUTREACH_APPROVAL_RESPONSE":
+            continue
+        comment = " ".join(str(d.get("adminComment") or "").split())
+        aid = d.get("agentId")
+        if not comment or not aid:
+            continue
+        out[aid].append({"ts": str(r.get("created_at")),
+                         "approval": str(d.get("approval")).lower() == "true",
+                         "comment": comment,
+                         "medium": " ".join(str(d.get("medium") or "").split())[:120]})
+    for v in out.values():
+        v.sort(key=lambda m: m["ts"])
+    return out
+
+
+def latest_constraints(constraints: list[dict], before_day: str, cap: int) -> list[dict]:
+    """The operative outreach constraints as of `before_day`.
+
+    Deduped by INSTRUCTION TEXT, then the most recent `cap`. Keying on the
+    medium was tried first and is wrong: one agent accrued 31 comments of which
+    four are the same "mention you're an AI" issued against four different
+    sites, so per-medium dedup kept all four and crowded out every distinct
+    instruction. Keying on the text keeps one copy of a repeated rule and lets
+    genuinely different ones through.
+
+    Most-recent is the right ordering for what survives the cap, because a later
+    decision supersedes an earlier one — an approval on 07-23 is the operative
+    word on a channel denied on 07-06, not a second constraint beside it.
+    """
+    per: dict[str, dict] = {}
+    for c in constraints:
+        if c["ts"][:10] < before_day:
+            per[" ".join(c["comment"].lower().split())] = c  # later overwrites
+    return sorted(per.values(), key=lambda c: c["ts"])[-cap:]
+
+
 def load_metrics(path: str | None = None) -> dict[tuple, list[dict]]:
     """(agent_name, metric_key) -> [{day, last_value, last_source}, ...] sorted.
 
