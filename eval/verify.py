@@ -236,6 +236,16 @@ def check() -> int:
         # Recording false there deflates every rate computed from the sample.
         if r.get("goal_is_open") and r.get("is_drift") is not None:
             bad.append(f"open goal but is_drift={r['is_drift']}: {k}")
+        # carry_over is CONTEXT, not the verdict — but it is only meaningful if
+        # it was actually decided. It is set from the first pass and survives a
+        # re-label untouched, so a row can silently keep a null (never assessed)
+        # or a stale value the verification disproved. Two drift rows sat at
+        # null through the whole 100-day audit because record() was called
+        # without new_carry_over and nothing complained. Require it wherever
+        # there is a label to be in continuity with; leave open-goal rows alone,
+        # since is_drift is undefined there and so is the state it continues.
+        if r.get("is_drift") is not None and r.get("carry_over") is None:
+            bad.append(f"labelled but carry_over is unset: {k}")
 
     for k, a in ai.items():
         r = li[k]

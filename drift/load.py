@@ -167,19 +167,46 @@ def load_turns(sessions_by_id: dict, start=None, end=None) -> dict[tuple, list[d
 
 def split_messages(am) -> tuple[str, str]:
     """
-    Return (reasoning, narration) across all four provider shapes.
+    Return (reasoning, narration) across all five provider shapes.
 
-    Anthropic       dict with content=[{type:thinking|text}]
-    Gemini          dict with candidates[].content.parts[] and a `thought` flag
-    OpenAI-Chat     dict with .reasoning (str) and .content (str)
+    Anthropic        dict with content=[{type:thinking|text}]
+    Claude-Code SDK  dict with _sdkFormat and textMessage/thinkingMessage,
+                     each wrapping an Anthropic message
+    Gemini           dict with candidates[].content.parts[] and a `thought` flag
+    OpenAI-Chat      dict with .content (str) plus reasoning under EITHER
+                     `reasoning` (OpenAI, xAI) or `reasoning_content`
+                     (DeepSeek, Kimi, Grok 4.5, the fine-tuned leaders)
     OpenAI-Responses list of {type:reasoning,summary[]} / {type:message,content[]}
 
-    Getting this wrong silently empties a whole provider — it has happened.
+    Getting this wrong silently empties a whole provider — it has happened
+    three times. Twice undetected until 2026-09-28: `reasoning_content` cost
+    137,748 turns of reasoning across six agents, and the SDK envelope cost
+    all 11,700 turns of "Opus 4.5 (Claude Code)" in BOTH channels. Neither
+    raised an error; both produced auditors confidently reporting that an
+    agent does not think. If you add a shape, add it to
+    tests/test_smoke.py::test_split_every_provider_shape too, and re-run the
+    per-agent channel census in eval/docs/AUDIT_PROTOCOL.md.
     """
     reasoning: list[str] = []
     narration: list[str] = []
 
     if isinstance(am, dict):
+        # Claude-Code SDK envelope: two ordinary Anthropic messages side by
+        # side under `textMessage` / `thinkingMessage`. The Anthropic branch
+        # below already reads that inner shape — nothing was unwrapping it, so
+        # all 11,679 turns of "Opus 4.5 (Claude Code)" came back with BOTH
+        # channels empty. Same family as the reasoning_content gap: a provider
+        # shape nobody checked, failing silently rather than loudly.
+        if am.get("_sdkFormat"):
+            for part in ("thinkingMessage", "textMessage"):
+                inner = (am.get(part) or {}).get("message")
+                if inner:
+                    r, n = split_messages(inner)
+                    reasoning.append(r)
+                    narration.append(n)
+            return ("\n".join(x for x in reasoning if x),
+                    "\n".join(x for x in narration if x))
+
         content = am.get("content")
         if isinstance(content, list):  # Anthropic
             for block in content:
@@ -191,8 +218,14 @@ def split_messages(am) -> tuple[str, str]:
                     narration.append(block.get("text") or "")
         elif isinstance(content, str):  # OpenAI-Chat
             narration.append(content)
-        if isinstance(am.get("reasoning"), str):  # OpenAI-Chat
-            reasoning.append(am["reasoning"])
+        # OpenAI-Chat. Two spellings in the wild: `reasoning` (OpenAI/xAI) and
+        # `reasoning_content` (the DeepSeek convention, copied by Kimi, Grok 4.5
+        # and the fine-tuned leaders). Reading only the first one dropped the
+        # reasoning channel for six agents and 137,748 turns — 6% of the dump,
+        # 97% of Kimi K2.6 — with no error, exactly as the docstring warns.
+        for key in ("reasoning", "reasoning_content"):
+            if isinstance(am.get(key), str):
+                reasoning.append(am[key])
         for cand in am.get("candidates") or []:  # Gemini
             for part in ((cand.get("content") or {}).get("parts") or []):
                 text = part.get("text") or ""

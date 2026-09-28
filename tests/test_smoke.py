@@ -3,16 +3,61 @@ from drift import features as F
 from drift.load import split_messages
 
 
-def test_split_all_four_provider_shapes():
+def test_split_every_provider_shape():
     anthropic = {"content": [{"type": "thinking", "thinking": "R"},
                              {"type": "text", "text": "N"}]}
     gemini = {"candidates": [{"content": {"parts": [
         {"text": "R", "thought": True}, {"text": "N"}]}}]}
     oai_chat = {"reasoning": "R", "content": "N"}
+    deepseek = {"reasoning_content": "R", "content": "N"}
     oai_resp = [{"type": "reasoning", "summary": [{"text": "R"}]},
                 {"type": "message", "content": [{"text": "N"}]}]
-    for shape in (anthropic, gemini, oai_chat, oai_resp):
+    sdk = {"_sdkFormat": True,
+           "thinkingMessage": {"message": {"content": [
+               {"type": "thinking", "thinking": "R"}]}},
+           "textMessage": {"message": {"content": [
+               {"type": "text", "text": "N"}]}}}
+    for shape in (anthropic, gemini, oai_chat, deepseek, oai_resp, sdk):
         assert split_messages(shape) == ("R", "N"), shape
+
+
+def test_sdk_envelope_is_unwrapped():
+    """"Opus 4.5 (Claude Code)" emitted 11,700 turns nobody could read.
+
+    Its messages nest two ordinary Anthropic messages under `textMessage` and
+    `thinkingMessage`. The Anthropic branch could already parse the inner
+    shape; nothing unwrapped the outer one, so BOTH channels returned empty
+    for every turn that agent ever took. Unwrapping recovered 4.98M chars.
+
+    A half-populated envelope must still yield the half that is there.
+    """
+    thinking_only = {"_sdkFormat": True, "thinkingMessage": {"message": {
+        "content": [{"type": "thinking", "thinking": "R"}]}}}
+    assert split_messages(thinking_only) == ("R", "")
+    text_only = {"_sdkFormat": True, "textMessage": {"message": {
+        "content": [{"type": "text", "text": "N"}]}}}
+    assert split_messages(text_only) == ("", "N")
+    assert split_messages({"_sdkFormat": True}) == ("", "")
+
+
+def test_reasoning_content_is_not_dropped():
+    """The docstring's warning, twice realised.
+
+    `reasoning_content` is the DeepSeek spelling of the OpenAI-Chat reasoning
+    field, copied by Kimi K2.6/K3, Grok 4.5 and both fine-tuned leaders.
+    Reading only `reasoning` emptied the channel for six agents and 137,748
+    turns — 6% of the dump, 97% of Kimi K2.6 — with no error raised. Two
+    separate auditors then concluded in writing that those agents emit no
+    reasoning at all, and one eval row's evidence was literally "0 of 584
+    turns carry reasoning text under split_messages" when 559 of them do.
+
+    A provider that goes quiet looks identical to an agent that stopped
+    thinking. That is why this asserts non-empty rather than just equality.
+    """
+    reasoning, narration = split_messages({"reasoning_content": "thought",
+                                           "content": "said"})
+    assert reasoning.strip(), "the whole point: this came back empty in prod"
+    assert (reasoning, narration) == ("thought", "said")
 
 
 def test_word_boundary_names():

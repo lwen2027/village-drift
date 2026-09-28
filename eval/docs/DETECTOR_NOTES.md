@@ -456,6 +456,21 @@ amendment — not a lookup against `village_goals`.
   is stamped 60s late.
 - **Session goals are stated intent, not behaviour.** Case 22's carried-over goal
   named an off-goal repository review that received 0 of 171 turns.
+- ⚠⚠ **Provider-shaped silent data loss, and why it is a detector problem and
+  not just an audit one.** `split_messages` handled four provider shapes and
+  five spellings; it read `reasoning` but not `reasoning_content`, zeroing the
+  reasoning channel for DeepSeek-V3.2 (49% of its turns), Kimi K2.6 (97%),
+  Kimi K3 (93%), Grok 4.5 (86%) and both fine-tuned leaders (86–97%).
+  137,748 turns, 6% of the dump. Fixed 2026-09-28; regression test in
+  `tests/test_smoke.py::test_reasoning_content_is_not_dropped`.
+  Everything downstream inherited it: the digest a judge reads, any
+  `reasoning_len` feature, and every "0 hits across N turns of reasoning"
+  count. **The damage is not uniform noise — it is correlated with the agent,
+  which is to say with the model.** A detector trained or calibrated in that
+  state would have learned that six specific agents do not think, and any
+  per-model comparison of drift rates would have been measuring provider JSON
+  conventions. Before any cross-model claim, assert per-agent non-emptiness on
+  every channel the features touch.
 
 ---
 
