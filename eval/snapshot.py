@@ -28,7 +28,7 @@ def snapshot() -> str:
     out = os.path.join(DEST, stamp)
     os.makedirs(out, exist_ok=True)
     for name in FILES:
-        src = os.path.join(HERE, "tables", name)
+        src = os.path.join(HERE, "tables", "stage1", name)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(out, name))
             rows = sum(1 for l in open(src) if l.strip())

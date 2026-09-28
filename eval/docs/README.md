@@ -23,13 +23,38 @@ An episode is a DRIFT episode, so only a row with `is_drift: true` seeds one,
 mirroring the pipeline itself — Stage 2 only ever investigates days Stage 1
 flagged.
 
+## Layout
+
+Tables are grouped by **stage**, because that is the distinction the whole eval
+rests on and it is otherwise invisible on disk:
+
+```
+eval/
+  docs/                    this file + the audit protocol, detector notes, Stage-2 design
+  tables/
+    stage1/                unit: agent-day.  target: is_drift
+      eval_100.jsonl         held-out labels
+      verification.jsonl     per-claim evidence for those labels, same-day only
+      train_23.jsonl         the hand-read cases the codebook came from
+    stage2/                unit: episode.    target: onset, mechanism
+      episodes.jsonl
+  digests/  raw/           the labelling surface and the full dumps
+  *.py                     the scripts
+```
+
+⚠ `eval/tables/` is gitignored **in full**, so neither the tables nor these
+subfolders survive a clone — the path constants in `verify.py` and
+`extract_episodes.py` are the only committed record of the layout. Keep them
+and this section in step.
+
 | path | what | use |
 |---|---|---|
-| `train_23.jsonl` | the 23 adjudicated hand-read cases | **training data** — the codebook, feature set and label space were derived from these. Scoring any method against them measures memorisation. |
-| `eval_100.jsonl` | held-out random draw | the only valid basis for comparing arms |
+| `tables/stage1/train_23.jsonl` | the 23 adjudicated hand-read cases | **training data** — the codebook, feature set and label space were derived from these. Scoring any method against them measures memorisation. |
+| `tables/stage1/eval_100.jsonl` | held-out random draw | the only valid basis for comparing arms |
+| `tables/stage1/verification.jsonl` | per-claim evidence behind each label | same-day only; cross-day material belongs to Stage 2 |
 | `digests/<day>__<agent>.txt` | the labelling surface | the **only** thing the labeller reads |
 | `raw/<day>/<agent>.json` | complete untruncated agent-day | failure analysis **only** — never an arm's input |
-| `episodes.jsonl` | Stage-2 ground truth | onset, timeline, corrections, mechanism; keyed `(agent, onset)` |
+| `tables/stage2/episodes.jsonl` | Stage-2 ground truth | onset, timeline, corrections, mechanism; keyed `(agent, onset)` |
 | `predictions/<arm>.jsonl` | one row per method per day | what each arm said, and what it cost |
 
 Everything except the scripts is gitignored: digests and raw carry verbatim agent
@@ -43,7 +68,7 @@ python3 eval/build_train_set.py                   # -> train_23.jsonl
 python3 eval/sample_eval_set.py --seed 20260926   # -> eval_100.jsonl   (~40s)
 python3 eval/render_digest.py                     # -> digests/ + raw/  (~70s)
 # label, THEN:
-python3 eval/enrich_monitor.py --labels eval/tables/eval_100.jsonl
+python3 eval/enrich_monitor.py --labels eval/tables/stage1/eval_100.jsonl
 ```
 
 ## The day-scoped rule

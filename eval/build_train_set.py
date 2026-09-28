@@ -5,7 +5,7 @@ from. They are TRAINING DATA: scoring any Stage-1 method against them measures
 memorisation. The `split` field exists to make excluding them mechanical rather
 than a thing someone has to remember.
 
-    python3 eval/build_train_set.py        # -> eval/tables/train_23.jsonl
+    python3 eval/build_train_set.py        # -> eval/tables/stage1/train_23.jsonl
 """
 from __future__ import annotations
 
@@ -129,7 +129,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--taxonomy", default=os.path.expanduser(
         "~/ai-village-drift-taxonomy.md"))
-    p.add_argument("--out", default="eval/tables/train_23.jsonl")
+    p.add_argument("--out", default="eval/tables/stage1/train_23.jsonl")
     a = p.parse_args()
     rows = parse(open(a.taxonomy).read())
     if len(rows) != 23:

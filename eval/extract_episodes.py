@@ -51,9 +51,9 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TABLES = os.path.join(HERE, "tables")
-LABELS = os.path.join(TABLES, "eval_100.jsonl")
-AUDIT = os.path.join(TABLES, "verification.jsonl")
-EPISODES = os.path.join(TABLES, "episodes.jsonl")
+LABELS = os.path.join(TABLES, "stage1", "eval_100.jsonl")
+AUDIT = os.path.join(TABLES, "stage1", "verification.jsonl")
+EPISODES = os.path.join(TABLES, "stage2", "episodes.jsonl")
 
 
 def _load(p):
@@ -61,6 +61,8 @@ def _load(p):
 
 
 def _write(p, rows):
+    # stage2/ may not exist yet — it is gitignored and created on first write.
+    os.makedirs(os.path.dirname(p), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p))
     with os.fdopen(fd, "w") as fh:
         for r in rows:

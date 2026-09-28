@@ -27,9 +27,11 @@ table too, so the two never drift apart.
 # day, was the agent working toward its assigned goal? The unit has to match
 # Stage 1's emission unit or predictions cannot be joined to labels at all.
 #
-# Multi-day facts belong in drift_onset and carry_over as CONTEXT. They must not
-# become the basis of the verdict — that conflates "this day was off-goal" with
-# "this episode was drift", and the detector only ever sees a day.
+# Multi-day facts must not become the basis of the verdict — that conflates
+# "this day was off-goal" with "this episode was drift", and the detector only
+# ever sees a day. `carry_over` is the one multi-day flag kept here, and it is
+# context, not grounds. Onset and operator_corrections are Stage-2 fields and
+# live in episodes.jsonl; see the note in record().
 #
 # A day_determinable flag was added here and removed. It was meant to mark
 # labels unreachable from a single day, but under a properly day-scoped
@@ -57,7 +59,8 @@ table too, so the two never drift apart.
 # from the previous working day. The span is derivable from the turns anyway;
 # duplicating it here only adds a number that can be wrong.
 #
-# When the divergence began at all — possibly on an earlier day — is drift_onset.
+# When the divergence began at all — possibly on an earlier day — is `onset`,
+# and it is a Stage-2 field recorded in episodes.jsonl, not here.
 
 from __future__ import annotations
 
@@ -66,9 +69,16 @@ import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Tables are split by STAGE, because that is the distinction the whole eval
+# rests on and it was previously invisible on disk:
+#   tables/stage1/  agent-day unit, target is_drift  — eval_100, verification, train_23
+#   tables/stage2/  episode unit,  target onset/mechanism — episodes
+# eval/tables/ is gitignored in full, so these constants are the only committed
+# record of the layout. Keep them in step with eval/docs/README.md.
 TABLES = os.path.join(HERE, "tables")
-LABELS = os.path.join(TABLES, "eval_100.jsonl")
-AUDIT = os.path.join(TABLES, "verification.jsonl")
+STAGE1 = os.path.join(TABLES, "stage1")
+LABELS = os.path.join(STAGE1, "eval_100.jsonl")
+AUDIT = os.path.join(STAGE1, "verification.jsonl")
 
 
 def _load(path):
@@ -78,6 +88,9 @@ def _load(path):
 
 
 def _write(path, rows):
+    # tables/ and its stage subdirs are gitignored, so a fresh clone has none
+    # of them; create on write rather than failing.
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
         for r in rows:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -102,8 +115,7 @@ def record(agent: str, day: str, *, claims, turning_points=(),
            sources=(), verified_by="claude-opus-5", verified_at="2026-09-26",
            new_reasoning=None, new_is_drift="unchanged", new_text=None,
            new_carry_over="unchanged", new_goal_is_open="unchanged",
-           new_goals=None, new_drift_onset="unchanged",
-           new_operator_corrections=None, notes=None) -> dict:
+           new_goals=None, notes=None) -> dict:
     """Replace the evidence row for one agent-day, and sync the label."""
     for c in claims:
         for f in ("claim", "evidence"):
@@ -154,26 +166,27 @@ def record(agent: str, day: str, *, claims, turning_points=(),
     if new_goal_is_open != "unchanged" and new_goal_is_open != row["goal_is_open"]:
         row["goal_is_open"] = new_goal_is_open
         changed.append("goal_is_open")
-    # When the divergence actually began. `start`/`end` are times on the row's
-    # own day; onset is a full timestamp and is routinely EARLIER than the row
-    # — Haiku's began 2026-07-06 16:06, a day before the sampled row. Without
-    # it, latency from goal assignment is unrecoverable, and every audit so far
-    # has established it only as free text inside a turning point.
+    # ⚠ drift_onset and operator_corrections ARE NOT WRITABLE HERE. Both are
+    # STAGE-2 fields and live in episodes.jsonl; extract_episodes.py migrated
+    # them off the label rows and both keys are now absent from all 100.
+    # Leaving the setters in place was a live bug: this function could put back
+    # a field that migration deletes, and nothing would notice until the next
+    # extract_episodes run. Removed 2026-09-28.
     #
-    # ⚠ Latency is NOT onset - goals[0].start. Anchor on whichever is later,
-    # the goal start or the agent's first active day under it: GPT-4.1 joined
-    # the village 13 days into a goal, so the raw difference would read as a
-    # 13-day-late drift when it began in its first hour.
-    if new_drift_onset != "unchanged" and new_drift_onset != row.get("drift_onset"):
-        row["drift_onset"] = new_drift_onset
-        changed.append("drift_onset")
-    # Was the agent told to go back to its goal, and did it? This separates
-    # "drifted and nobody noticed" from "drifted, was told plainly, carried on"
-    # — very different findings about the same behaviour. Each entry:
-    #   ts, text, kind (direct | automated-nudge), complied (True/False/"partial")
-    if new_operator_corrections is not None:
-        row["operator_corrections"] = new_operator_corrections
-        changed.append("operator_corrections")
+    # Why they belong to Stage 2, kept here because the reasoning is the point:
+    #   * onset is a full timestamp routinely EARLIER than the row — Haiku's is
+    #     2026-07-06 16:06, a day before its sampled day — so recording it on a
+    #     day-scoped row is the exact conflation the two-stage split exists to
+    #     prevent. 23 of the first 50 turning points sat on a different day than
+    #     the row they were attached to.
+    #   * operator_corrections separates "drifted and nobody noticed" from
+    #     "drifted, was told plainly, carried on" — a property of the episode,
+    #     not of the day.
+    # And a trap worth keeping wherever onset is eventually written: latency is
+    # NOT onset - goals[0].start. Anchor on whichever is later, the goal start
+    # or the agent's first active day under it — GPT-4.1 joined the village 13
+    # days into a goal, so the raw difference reads as a 13-day-late drift when
+    # it began in its first hour.
     row["verified"] = True
 
     rows = [r for r in _load(AUDIT) if not (r["agent"] == agent and r["day"] == day)]

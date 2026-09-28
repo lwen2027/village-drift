@@ -30,7 +30,7 @@ RANK = {"high": 3, "medium": 2, "low": 1}
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--labels", default="eval/tables/train_23.jsonl",
+    p.add_argument("--labels", default="eval/tables/stage1/train_23.jsonl",
                    help="rows to key on; the verdict is written to --out, never back")
     p.add_argument("--out", default=os.path.expanduser("~/village-drift-monitor/monitor.jsonl"),
                    help="OUTSIDE the repo. Auditors are pointed at /Users/lwen/village-drift "

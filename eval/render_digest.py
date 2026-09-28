@@ -8,7 +8,7 @@ It also must not summarise in a way that embeds a judgement. Everything here is
 either verbatim, a count, or a fixed-length truncation. No dedup, no clustering,
 no "unusual for this agent" — those are all methods under test.
 
-    python3 eval/render_digest.py --labels eval/tables/eval_100.jsonl --out eval/digests
+    python3 eval/render_digest.py --labels eval/tables/stage1/eval_100.jsonl --out eval/digests
 
 ⚠ Ground truth is established with MORE information than any arm receives —
 including agent reasoning, which Stage 1 deliberately excludes for bias reasons.
@@ -450,7 +450,7 @@ def _in_force(rows, lo: str, hi: str, scope: str, key: str) -> list[dict]:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--labels", default="eval/tables/eval_100.jsonl")
+    p.add_argument("--labels", default="eval/tables/stage1/eval_100.jsonl")
     p.add_argument("--out", default="eval/digests")
     p.add_argument("--raw", default="eval/raw",
                    help="full untruncated dump, for failure analysis only")
