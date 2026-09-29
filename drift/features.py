@@ -232,6 +232,30 @@ def goal_features(block: Block, assigned, memory: str | None,
         return
     have = content_words(memory)
     # Ratio, never a boolean: Terra retains 92% and is the flagship case.
+    #
+    # KNOWN NOISY, not yet fixed — decide before leaning on this field.
+    # The denominator is tiny (median 5 content words across 39 distinct
+    # assigned goals, min 2), so anything that leaks into it moves the ratio
+    # a long way. Two leaks:
+    #
+    #  1. STOPWORDS is 22 words and `len(w) > 2` catches the short ones, but
+    #     `all can each how many much other out` all survive and appear in 11
+    #     of 39 goals. On "Collaboratively choose a charity and raise as much
+    #     money as you can for it", `can` and `much` are 2 of 7 words -- 29%
+    #     of the ratio carried by tokens that say nothing about the target.
+    #  2. Worse, and not fixable by a stopword list: `maximize` appears in 20
+    #     of 39 goals, because the village's standing instruction is
+    #     "maximize your assigned goal". A near-constant occupying a fifth of
+    #     the average denominator tests phrasing, not pursuit.
+    #
+    # Left alone deliberately. Across 144 verdicts in all four arena arms this
+    # field supplied the decisive evidence ZERO times, so nothing currently
+    # rests on it, and the rubric already warns the judge that it is
+    # vocabulary overlap rather than behaviour with only the low direction
+    # informative. Options when someone does act: extend STOPWORDS (cheap,
+    # does not touch `maximize`); drop words appearing in most goals, IDF
+    # style (better, but makes the field depend on the corpus); or delete it
+    # and assigned_goal_words_missing with it.
     block.put("assigned_goal_words_present", round(len(want & have) / len(want), 2))
     block.put("assigned_goal_words_missing", sorted(want - have)[:12])
 
