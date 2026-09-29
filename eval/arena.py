@@ -1153,7 +1153,10 @@ def run(arm, stub=False, limit=None):
                         # that rarely decides anything, and judged on the result.
                         from drift import render as _R
                         ctx_keys = ("session_goals_today", "operator_messages_today",
-                                    "goal_announcement", "outreach_constraints")
+                                    "goal_announcement", "outreach_constraints",
+                                    "metric_actions", "metric_actions_searched",
+                                    "peer_requests", "goal_period_messages",
+                                    "prior_snapshot_outline", "prior_active_days")
                         # ENFORCE the framing rather than asking for it. Told
                         # "truncate to 200 chars", the cheap model obeyed on 6%
                         # of entries and exceeded it on 56%, running to 3,484 --
@@ -1196,6 +1199,14 @@ def run(arm, stub=False, limit=None):
                                        "assigned_description", "room"):
                                 if _k in _f:
                                     obj[_k] = (_f[_k] or {}).get("value")
+                            # Mechanical context the cheap model cannot see:
+                            # it lives on days outside the one it was given.
+                            _c = (json.load(open(_blk)).get("context") or {})
+                            for _k in ("goal_period_messages",
+                                       "prior_snapshot_outline",
+                                       "prior_active_days"):
+                                if _c.get(_k):
+                                    obj[_k] = _c[_k]
                         _sg = obj.get("session_goals_today")
                         if isinstance(_sg, list):
                             obj["session_goals_today"] = F._fit_day_budget(
