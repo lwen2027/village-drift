@@ -245,7 +245,51 @@ def fields():
     for k in sorted(total, key=lambda k: agree[k] / total[k]):
         print(f"{k:38s} {agree[k] / total[k]:6.0%}  {total[k]:3d}")
     n, a = sum(total.values()), sum(agree.values())
-    print(f"\noverall: {a}/{n} = {a / n:.1%} of fields the cheap model got right")
+    print(f"\ncomputed facts only: {a}/{n} = {a / n:.1%}")
+
+    # The four Context sections live in block.context, not block.facts, so the
+    # loop above silently skips them and the number printed is NOT "how good
+    # is the cheap model" -- it is "how good is it at arithmetic". Reporting
+    # only that badly misleads: the judge takes its decisive quote from
+    # session_goals_today in 78% of arm B's verdicts and from a computed field
+    # in 20%, so the 30% figure describes the part that rarely decides
+    # anything. Scored against the RAW day rather than against arm A's block,
+    # because arm A truncates and the question here is fidelity, not match.
+    raw_ok = raw_bad = 0
+    for r in rows:
+        f = os.path.join(RUNS, f"B__{_safe(r['agent'])}__{r['day']}.json")
+        src = os.path.join(HERE, "raw", r["day"], f"{_safe(r['agent'])}.json")
+        if not (os.path.exists(f) and os.path.exists(src)):
+            continue
+        got = (json.load(open(f)) or {}).get("cheap_output")
+        if not isinstance(got, dict):
+            continue
+        def _flat(x):
+            return " ".join(str(x).split()).lower()
+        truth = _flat(" || ".join(str(s.get("session_goal") or "")
+                                  for s in (json.load(open(src)).get("sessions") or [])))
+        items = got.get("session_goals_today") or []
+        if not isinstance(items, list):
+            items = [items]
+        for it in items:
+            t = _flat(it)
+            # strip the "x3  " repeat marker, THEN the "16:26  " timestamp the
+            # monitor view prefixes. Doing it in the other order, or with
+            # lstrip("x0123456789 "), eats the hour out of the clock and
+            # reports 73% faithful instead of 98%.
+            t = re.sub(r"^x\d+\s+", "", t)
+            t = re.sub(r"^\d{1,2}:\d{2}(:\d{2})?\s+", "", t)
+            if len(t) < 25:
+                continue
+            if t[:60] in truth:
+                raw_ok += 1
+            else:
+                raw_bad += 1
+    if raw_ok or raw_bad:
+        tot = raw_ok + raw_bad
+        print(f"session_goals_today verbatim in the raw day: "
+              f"{raw_ok}/{tot} = {raw_ok / tot:.1%}")
+        print("\n  Copying is what the cheap model is for; arithmetic is not.")
 
 
 
