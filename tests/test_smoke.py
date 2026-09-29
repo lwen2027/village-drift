@@ -119,28 +119,47 @@ def test_todays_session_goals_are_in_the_block():
     # an earlier intent is behaviour, not formatting.
     assert out == ["x3  ship the thing", "review PRs", "ship the thing"]
     assert F.session_goals_today([]) == []
-    assert len(F.session_goals_today(["q" * 900])[0]) == config.TODAY_GOAL_CHARS
+    assert F.session_goals_today(["q" * 900]) == ["q" * 900]
 
 
-def test_today_and_history_goal_caps_are_separate_knobs():
-    """They shared HISTORY_GOAL_CHARS, which was wrong in both directions.
+def test_todays_session_goals_are_never_truncated_per_goal():
+    """They were, at 200 and then 400, and both were wrong.
 
-    Today's session goals decide 78% of arm A's verdicts; the history strip is
-    cross-day and rule 4 forbids it carrying one. Tuning the decisive field
-    therefore silently resized the one that cannot matter, and vice versa. At
-    the shared value of 200 the block kept 13% of today's session-goal text
-    and cut 61% of goals mid-sentence -- these are working-memory dumps
-    averaging 1,270 chars, not one-line goals.
+    Intent IS front-loaded -- ten long goals across ten agents all name their
+    target inside the first ~130 chars. The wrong conclusion was that the
+    rest is padding. Past the intent line these carry "DONE this session
+    (don't redo): (1)...", the agent's own record of what it spent the day
+    ON, which for "did it pursue the assigned target" is the evidence.
 
-    This asserts they are INDEPENDENT, not that either holds a given value:
-    the point is that moving one must not move the other.
+    The history strip still caps, and must: it is cross-day, and rule 4
+    forbids it carrying a verdict.
     """
-    assert config.TODAY_GOAL_CHARS != config.HISTORY_GOAL_CHARS
     long = "z" * 5000
-    assert len(F.session_goals_today([long])[0]) == config.TODAY_GOAL_CHARS
-    strip = F.history_strip([("2026-01-01", long)])
-    # "YYYY-MM-DD  " prefix, then the history cap
-    assert len(strip[0]) == 12 + config.HISTORY_GOAL_CHARS
+    assert F.session_goals_today([long]) == [long], "today's goals go whole"
+    assert len(F.history_strip([("2026-01-01", long)])[0]) \
+        == 12 + config.HISTORY_GOAL_CHARS, "cross-day still capped"
+
+
+def test_day_budget_drops_whole_goals_from_the_middle():
+    """One agent writes 310-387K chars of session goals a day; the corpus
+    median is 7,008. Bound the DAY so that agent cannot bury the block,
+    without truncating the 93% of days that are fine.
+
+    Middle-out: the opening intent and where the day ended are the two
+    informative ends. And the elision must be VISIBLE -- a judge told text is
+    missing can weigh the absence; one silently cut cannot.
+    """
+    big = ["A" * 9000] + [f"{c}" * 9000 for c in "BCDEFGHIJ"] + ["Z" * 9000]
+    out = F.session_goals_today(big)
+    joined = " ".join(out)
+    assert out[0].startswith("A"), "opening intent kept"
+    assert out[-1].startswith("Z"), "where the day ended kept"
+    assert "omitted" in joined and "artefact of truncation" in joined
+    assert all(len(x) in (9000,) or "omitted" in x for x in out), \
+        "goals are dropped entire, never cut mid-sentence"
+    # a normal day is returned untouched
+    small = ["plan the thing", "ship the thing"]
+    assert F.session_goals_today(small) == small
     # whitespace is normalised BEFORE comparison, or near-identical goals
     # differing only in wrapping fail to collapse
     assert F.session_goals_today(["  a   b ", "a b"]) == ["x2  a b"]

@@ -44,15 +44,26 @@ HISTORY_GOAL_CHARS = 200
 # mean 1,270 chars, p90 2,691, max 25,453 over 2,160 goals in 101 agent-days.
 # At 200 the block kept 13% of that text and cut 61% of goals mid-sentence.
 #
-# 400, not more. Sampling ten long goals across ten agents, every one states
-# its target inside the first ~130 chars ("Continue Gomoku Game 21 vs
-# Computer", "GOAL 'Follow your leader!'"); past that it is status detail --
-# file paths, move lists, what shipped. So the marginal text beyond ~400 is
-# mostly not about the target, and arm D is the standing warning that feeding
-# the judge more prose can cost precision rather than buy it: it read 87% of
-# arm A's block as verbatim context and returned four false positives.
-# 400 cuts truncation from 61% to 33% of goals for 9% more block.
-TODAY_GOAL_CHARS = 400
+# NO per-goal cap. An earlier version truncated each goal (200, then 400) on
+# the reasoning that intent is front-loaded -- ten long goals sampled across
+# ten agents all state their target inside the first ~130 chars. That part is
+# true and it is the wrong conclusion: past the intent line these goals carry
+# "DONE this session (don't redo): (1)... (2)...", which is the agent's own
+# record of what it spent the day ON. For "did it work toward the assigned
+# target", that record is the evidence, not padding.
+#
+# Instead, a whole-DAY budget, and goals are dropped entire rather than cut
+# mid-sentence. Per agent-day the uncapped text runs median 7,008 chars, p75
+# 15,116, p95 68,980, max 387,397 -- so a cap tuned for the tail starves the
+# median. 60,000 leaves 93 of 101 agent-days completely untouched and trims 8,
+# four of them the same agent (Claude Sonnet 5, 310-387K chars/day) whose
+# goals would bury every other section anyway.
+#
+# Dropped from the MIDDLE, keeping the day's opening intent and where it ended
+# up, with an explicit marker -- a judge told text is missing can weigh the
+# absence; one silently cut cannot, and "absent from my input" is exactly the
+# inference the rubric warns against.
+TODAY_GOAL_DAY_BUDGET = 60_000
 # Operator messages are few and decisive, so they are carried verbatim rather
 # than summarised. 600 holds the longest real correction seen in the sample.
 OPERATOR_MSG_CHARS = 600

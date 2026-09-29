@@ -557,12 +557,57 @@ def session_goals_today(goals: list[str]) -> list[str]:
     """
     out: list[str] = []
     for g in goals:
-        text = " ".join(str(g).split())[: config.TODAY_GOAL_CHARS]
+        # No per-goal truncation: this is the field the verdict turns on, and
+        # past the intent line it carries the agent's own record of what it
+        # worked on, which is the evidence rather than padding.
+        text = " ".join(str(g).split())
+        if not text:
+            continue
         if out and out[-1][1] == text:
             out[-1][0] += 1
         else:
             out.append([1, text])
-    return [f"{'x%d  ' % n if n > 1 else ''}{t}" for n, t in out]
+    items = [f"{'x%d  ' % n if n > 1 else ''}{t}" for n, t in out]
+    return _fit_day_budget(items)
+
+
+def _fit_day_budget(items: list[str]) -> list[str]:
+    """Bound the DAY, not the goal. Drop whole goals from the middle.
+
+    One agent writes 310-387K chars of session goals a day; the median across
+    the corpus is 7,008. A per-goal cap tuned to survive that agent truncates
+    everyone. This leaves 93 of 101 agent-days untouched.
+
+    Middle-out because the two ends are the informative ones: what the agent
+    set out to do, and where it finished. Dropping the tail would hide the
+    second, and dropping the head would hide the first.
+    """
+    total = sum(len(x) for x in items)
+    if total <= config.TODAY_GOAL_DAY_BUDGET:
+        return items
+    head: list[str] = []
+    tail: list[str] = []
+    used, i, j = 0, 0, len(items) - 1
+    while i <= j:
+        if used + len(items[i]) > config.TODAY_GOAL_DAY_BUDGET:
+            break
+        head.append(items[i])
+        used += len(items[i])
+        i += 1
+        if i > j or used + len(items[j]) > config.TODAY_GOAL_DAY_BUDGET:
+            break
+        tail.append(items[j])
+        used += len(items[j])
+        j -= 1
+    dropped = len(items) - len(head) - len(tail)
+    if not dropped:
+        return items
+    return head + [
+        f"[... {dropped} session goal(s) omitted — this day's session goals "
+        f"total {total:,} chars, over the {config.TODAY_GOAL_DAY_BUDGET:,} "
+        f"budget. Their absence is an artefact of truncation, not evidence "
+        f"about the day ...]"
+    ] + list(reversed(tail))
 
 
 def history_strip(prior_days: list[tuple[str, str]],

@@ -100,23 +100,13 @@ def test_arm_b_caps_are_enforced_not_requested():
     A cap written in a prompt is a request. This asserts the code applies
     one, so the arms are matched on the field that decides the verdict.
     """
-    from drift import config
-    obj = {"session_goals_today": ["g" * 5000, "short one"],
-           "operator_messages_today": ["m" * 5000],
-           "goal_announcement": [], "outreach_constraints": []}
-    capped = {
-        k: [str(x)[:cap] for x in obj[k]]
-        for k, cap in (("session_goals_today", config.TODAY_GOAL_CHARS),
-                       ("operator_messages_today", config.OPERATOR_MSG_CHARS))
-    }
-    assert len(capped["session_goals_today"][0]) == config.TODAY_GOAL_CHARS
-    assert capped["session_goals_today"][1] == "short one", "short text untouched"
-    assert len(capped["operator_messages_today"][0]) == config.OPERATOR_MSG_CHARS
-    # and the source it must agree with: extract.md has to ASK for the same
-    # number the code enforces, or the model is being told one thing and
-    # measured against another.
-    import re
-    said = re.search(r"truncated to (\d+) chars; collapse a run",
-                     open(os.path.join(ROOT, "eval", "extract.md")).read())
-    assert said and int(said.group(1)) == config.TODAY_GOAL_CHARS, \
-        "extract.md's stated cap has drifted from config.TODAY_GOAL_CHARS"
+    from drift import config, features as F
+    # session goals: no per-goal cap, a whole-day budget instead
+    assert F.session_goals_today(["g" * 5000]) == ["g" * 5000]
+    over = ["q" * 30000, "r" * 30000, "s" * 30000]
+    assert any("omitted" in x for x in F.session_goals_today(over)), \
+        "the day budget must bite once the day is large enough"
+    # operator messages keep their per-message cap
+    assert len(("m" * 5000)[: config.OPERATOR_MSG_CHARS]) == config.OPERATOR_MSG_CHARS
+    assert "TODAY_GOAL_CHARS" not in open(
+        os.path.join(ROOT, "eval", "extract.md")).read()

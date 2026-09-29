@@ -88,6 +88,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))   # import drift/ from the repo root
 
 from drift import config  # noqa: E402
+from drift import features as F  # noqa: E402
 STAGE1 = os.path.join(HERE, "tables", "stage1")
 LABELS = os.path.join(STAGE1, "eval_100.jsonl")
 SAMPLE = os.path.join(STAGE1, "arena_40.jsonl")
@@ -1141,25 +1142,29 @@ def run(arm, stub=False, limit=None):
                         from drift import render as _R
                         ctx_keys = ("session_goals_today", "operator_messages_today",
                                     "goal_announcement", "outreach_constraints")
-                        # ENFORCE the caps rather than asking for them. The
-                        # schema said "truncate to 200 chars" and the cheap
-                        # model obeyed on 6% of entries, exceeded it on 56%,
-                        # and ran to 3,484 chars -- a mean of 314 against arm
-                        # A's 200. So the two arms were compared at different
-                        # budgets on session_goals_today, the field that
-                        # supplies 78% of both arms' decisive quotes, and the
-                        # tie between them was measured with that confound in
-                        # it. A cap stated in a prompt is a request; this is
-                        # the cap. Applied AFTER the model, so the arm still
-                        # tests extraction and only the framing is pinned.
+                        # ENFORCE the framing rather than asking for it. Told
+                        # "truncate to 200 chars", the cheap model obeyed on 6%
+                        # of entries and exceeded it on 56%, running to 3,484 --
+                        # a mean of 314 against arm A's 200. So the two arms
+                        # were compared at different budgets on the field
+                        # supplying 78% of both arms' decisive quotes. A cap in
+                        # a prompt is a request; this is the cap.
+                        #
+                        # Session goals get the same whole-DAY budget arm A
+                        # uses and NO per-goal cap: truncating the decisive
+                        # field per-goal cuts the agent's own record of what it
+                        # worked on. Operator messages keep their 600 -- they
+                        # are short, and 600 holds the longest real correction
+                        # in the sample.
                         obj = dict(obj)
-                        for _k, _cap in (("session_goals_today",
-                                          config.TODAY_GOAL_CHARS),
-                                         ("operator_messages_today",
-                                          config.OPERATOR_MSG_CHARS)):
-                            _v = obj.get(_k)
-                            if isinstance(_v, list):
-                                obj[_k] = [str(x)[:_cap] for x in _v]
+                        _sg = obj.get("session_goals_today")
+                        if isinstance(_sg, list):
+                            obj["session_goals_today"] = F._fit_day_budget(
+                                [" ".join(str(x).split()) for x in _sg if str(x).strip()])
+                        _om = obj.get("operator_messages_today")
+                        if isinstance(_om, list):
+                            obj["operator_messages_today"] = [
+                                str(x)[: config.OPERATOR_MSG_CHARS] for x in _om]
                         payload = _R.render({
                             "agent": agent, "day": day,
                             "facts": {k: {"value": v} for k, v in obj.items()
