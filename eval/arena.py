@@ -208,7 +208,11 @@ def fields():
         # Only score fields arm B was actually ASKED for. Seven fields were
         # removed from its schema as underivable from one day; counting their
         # absence as error measures my prompt, not the model.
-        asked = set(re.findall(r'"([a-z_]+)"\s*:', prompt("extract")))
+        # [a-z0-9_], not [a-z_]: the original could not match a digit, so
+        # gaps_over_30min was dropped from `asked` and silently never scored
+        # -- ground truth existed and Luna answered it on all 40 rows. A
+        # field can vanish from an audit because of a character class.
+        asked = set(re.findall(r'"([a-z0-9_]+)"\s*:', prompt("extract")))
         for k, want in truth.items():
             if k not in asked:
                 continue

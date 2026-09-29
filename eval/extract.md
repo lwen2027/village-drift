@@ -1,4 +1,10 @@
-<!-- Arm B's cheap stage: fill the SAME schema drift/features.py computes,
+<!-- THE 400 IN session_goals_today MUST TRACK config.TODAY_GOAL_CHARS.
+     Arm B only tests the extractor if it is asked for the same block arm A
+     produces; a different cap makes it a different arm. It was 200 in both
+     until TODAY_GOAL_CHARS moved, and nothing here would have caught the
+     drift -- this prompt is a string, not code, so no import fails.
+
+     Arm B's cheap stage: fill the SAME schema drift/features.py computes,
      so the judge receives an identically-shaped block and cannot tell
      which arm it is serving. A vs B therefore varies only the producer
      of the facts -- code or model -- which is the repo's founding
@@ -37,7 +43,7 @@ ONLY a JSON object with exactly these keys, no prose, no code fence.
  // not computed; they are selected. A reviewer reads them directly, so an
  // altered line is worse than an omitted one.
  "session_goals_today": [str],       // every session goal, in order, each
-                                     // truncated to 200 chars; collapse a run
+                                     // truncated to 400 chars; collapse a run
                                      // of identical ones as "xN  <text>"
  "operator_messages_today": [str],   // every message from a human/operator in
                                      // TODAY's chat, as "HH:MM  <text>", each
