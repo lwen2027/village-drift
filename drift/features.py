@@ -508,6 +508,63 @@ def memory_outline(content: str, max_sections: int = 60) -> list[str]:
     return out
 
 
+def operator_messages_today(chat: list[dict]) -> list[str]:
+    """Same-day human/operator messages, verbatim.
+
+    The block previously carried NO incoming messages at all -- only
+    `chat_sent`, a count of what the agent said. So the sharpest test in the
+    protocol, "does any message tell the agent it is working on the wrong
+    thing?", was unanswerable from the block. Measured on the 40-row arena
+    sample: 39 of 40 rows have same-day messages addressed to the agent or
+    from a human, INCLUDING ALL TEN DRIFT ROWS.
+
+    Operator messages only, not peer mentions. Splitting the two on that
+    sample: operator (including broadcasts) is 932 tokens at the median,
+    peers naming the agent adds 2,000-4,000 more for a weaker signal. Note
+    also that "operator AND names this agent" is median ZERO -- direct named
+    corrections are rare, most operator traffic is broadcast, so a rule
+    keyed on being named would almost never fire.
+
+    Human is `agent_speaker_id is None and speaker_type != "agent"`, the same
+    test render_digest uses.
+    """
+    out = []
+    for c in chat:
+        if c.get("agent_speaker_id") is not None or c.get("speaker_type") == "agent":
+            continue
+        text = " ".join(str(c.get("content") or "").split())
+        if not text:
+            continue
+        out.append(f"{str(c.get('ts'))[11:16]}  {text[: config.OPERATOR_MSG_CHARS]}")
+    return out
+
+
+def session_goals_today(goals: list[str]) -> list[str]:
+    """TODAY's session goals, in order — the agent's own statement of intent.
+
+    The block previously carried prior days' session goals (history_strip) and
+    today's only as statistics: session_goal_repetition and
+    agents_named_in_session_goals consume the text and emit counts. So the
+    judge could read what the agent set out to do LAST week verbatim, but not
+    today, which is backwards under rule 4 — cross-day material cannot carry a
+    verdict. It showed: asked for its decisive evidence, the judge quoted a
+    prior-day memory heading, because prior-day prose was the only prose there.
+
+    Consecutive identical goals are collapsed. Agents commonly carry one goal
+    across a dozen sessions unchanged, and 16 copies of the same 200 chars is
+    the duplication this block exists to avoid; the repetition itself is
+    already quantified by session_goal_repetition.
+    """
+    out: list[str] = []
+    for g in goals:
+        text = " ".join(str(g).split())[: config.HISTORY_GOAL_CHARS]
+        if out and out[-1][1] == text:
+            out[-1][0] += 1
+        else:
+            out.append([1, text])
+    return [f"{'x%d  ' % n if n > 1 else ''}{t}" for n, t in out]
+
+
 def history_strip(prior_days: list[tuple[str, str]],
                   goal_at=None) -> list[str]:
     """Agent's own LAST session goal per active day — what happened, not planned.

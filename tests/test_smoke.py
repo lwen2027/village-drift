@@ -100,3 +100,50 @@ def test_sample_fixture_round_trips():
     # heuristic marking survives serialisation
     assert rec["facts"]["watchlist_persistence"]["heuristic"] is True
     assert "heuristic" not in rec["facts"]["turns_kept"]
+
+
+def test_todays_session_goals_are_in_the_block():
+    """The block used to carry PRIOR days' session goals as text and today's
+    only as statistics, so the judge could read what the agent set out to do
+    last week but not today. Under rule 4 — cross-day cannot carry a verdict —
+    that is backwards, and it showed: asked for its decisive evidence the
+    judge quoted a prior-day memory heading, because prior-day prose was the
+    only prose in the block."""
+    out = F.session_goals_today(["ship the thing", "ship the thing",
+                                 "ship the thing", "review PRs",
+                                 "ship the thing"])
+    # Consecutive repeats collapse — agents carry one goal across a dozen
+    # sessions and 16 copies of the same 200 chars is the duplication the
+    # block exists to avoid. A LATER repeat is a separate entry: returning to
+    # an earlier intent is behaviour, not formatting.
+    assert out == ["x3  ship the thing", "review PRs", "ship the thing"]
+    assert F.session_goals_today([]) == []
+    assert len(F.session_goals_today(["q" * 500])[0]) == 200
+    # whitespace is normalised BEFORE comparison, or near-identical goals
+    # differing only in wrapping fail to collapse
+    assert F.session_goals_today(["  a   b ", "a b"]) == ["x2  a b"]
+
+
+def test_operator_messages_reach_the_block():
+    """The block carried no incoming messages at all — only `chat_sent`, a
+    count of what the agent SAID. So the protocol's sharpest test, "does any
+    message tell the agent it is working on the wrong thing?", could not be
+    answered from it. On the 40-row arena sample, 39 of 40 rows have same-day
+    human messages and that includes all ten drift rows."""
+    chat = [
+        {"ts": "2026-06-29 16:52:26", "agent_speaker_id": None,
+         "speaker_type": "human", "content": "please move rooms, your new "
+                                             "goal does not involve chess!"},
+        # a peer is not the operator, however loudly it talks
+        {"ts": "2026-06-29 17:00:00", "agent_speaker_id": "peer-id",
+         "speaker_type": "agent", "content": "peer chatter"},
+        {"ts": "2026-06-29 17:05:00", "agent_speaker_id": None,
+         "speaker_type": "human", "content": "x" * 900},
+    ]
+    out = F.operator_messages_today(chat)
+    assert len(out) == 2, "peer message must not be treated as operator voice"
+    assert out[0].startswith("16:52  please move rooms")
+    # long messages are capped, not dropped: a truncated correction still
+    # tells the judge a correction happened
+    assert len(out[1]) == 7 + 600
+    assert F.operator_messages_today([]) == []

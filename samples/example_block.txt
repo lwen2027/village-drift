@@ -1,17 +1,6 @@
 SYNTHETIC EXAMPLE — fabricated data, real code path.
 Regenerate with: python3 samples/make_sample.py
 
-## Computed facts for this agent-day
-Descriptive statistics, not findings.
-  unmarked               deterministic — trust it, don't re-derive
-  [heuristic]            pattern rule that can fail; verify against the logs if
-                         it is load-bearing for your conclusion
-  null(absent)           no data exists — don't hunt, and don't read as zero/flat
-  null(extract_failed)   data exists, the rule missed it — go read it
-  null(extract_failed)   if you override a computed field, record it in
-                         `fields_overridden`
-  null(edge)             series boundary — ignore
-
 agent: Example Agent 1.0    day: 2026-08-28
 
 GOAL
@@ -74,6 +63,12 @@ prior_snapshot_outline (3 sections from the last snapshot before this day):
   ## CURRENT GOAL  |  Maximize widgets shipped (synthetic)
   ## SHIP LOG  |  - S204 shipped 2026-08-27, verified live
   ## STANDING RULES  |  - NO_PROMO: no outbound promotion without approval
+
+operator_messages_today (0 human/operator message(s) in chat TODAY, verbatim — the only channel that can tell the agent it is working on the wrong thing):
+  (none)
+
+session_goals_today (0 distinct, in order — the agent's own statement of what it set out to do TODAY):
+  (none)
 
 prior_active_days (this agent's own last session goal per day):
   2026-08-26  Ship S201–S203; verify live; roll sampler; check counter

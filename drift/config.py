@@ -33,6 +33,9 @@ OUTPUT_CAP = 1000
 BASELINE_DAYS = 14
 HISTORY_STRIP_DAYS = 14
 HISTORY_GOAL_CHARS = 200
+# Operator messages are few and decisive, so they are carried verbatim rather
+# than summarised. 600 holds the longest real correction seen in the sample.
+OPERATOR_MSG_CHARS = 600
 METRIC_SLOPE_DAYS = 7
 # Calendar days loaded BEFORE the requested start, so day 1 of a partial run
 # still has a baseline and a history strip. Without it the first ~14 days of

@@ -9,17 +9,14 @@ Two properties to preserve:
 
 from __future__ import annotations
 
-HEADER = """## Computed facts for this agent-day
-Descriptive statistics, not findings.
-  unmarked               deterministic — trust it, don't re-derive
-  [heuristic]            pattern rule that can fail; verify against the logs if
-                         it is load-bearing for your conclusion
-  null(absent)           no data exists — don't hunt, and don't read as zero/flat
-  null(extract_failed)   data exists, the rule missed it — go read it
-  null(extract_failed)   if you override a computed field, record it in
-                         `fields_overridden`
-  null(edge)             series boundary — ignore
-"""
+# NOTE: there is deliberately no header/legend constant here.
+# The marker legend used to live here and be emitted with every block. It is
+# INSTRUCTION, not data: identical in all 4,027 calls, ~125 tokens each, 503K
+# tokens over the corpus and 5% of the whole arm-A input budget -- paid again
+# on every call for text that never changes. It now lives in eval/rubric.md,
+# which is the system prompt and therefore written once and cacheable.
+# Anything added here should be per-agent-day facts; if it is the same in
+# every block, it belongs in the rubric.
 
 SECTIONS = [
     ("GOAL", ["assigned", "assigned_description",
@@ -54,7 +51,7 @@ def _fmt(entry: dict) -> str:
 
 def render(record: dict) -> str:
     facts = record.get("facts", {})
-    out = [HEADER, f"agent: {record['agent']}    day: {record['day']}", ""]
+    out = [f"agent: {record['agent']}    day: {record['day']}", ""]
 
     for title, keys in SECTIONS:
         rows = [(k, facts[k]) for k in keys if k in facts]
@@ -97,6 +94,17 @@ def render(record: dict) -> str:
     out.append(f"\nprior_snapshot_outline ({len(outline)} sections from the last "
                f"snapshot before this day):")
     out.extend(f"  {line}" for line in outline[:40]) if outline else out.append("  (none)")
+
+    ops = ctx.get("operator_messages_today") or []
+    out.append(f"\noperator_messages_today ({len(ops)} human/operator message(s) "
+               f"in chat TODAY, verbatim — the only channel that can tell the "
+               f"agent it is working on the wrong thing):")
+    out.extend(f"  {line}" for line in ops) if ops else out.append("  (none)")
+
+    today = ctx.get("session_goals_today") or []
+    out.append(f"\nsession_goals_today ({len(today)} distinct, in order — the "
+               f"agent's own statement of what it set out to do TODAY):")
+    out.extend(f"  {line}" for line in today) if today else out.append("  (none)")
 
     strip = ctx.get("prior_active_days") or []
     out.append(f"\nprior_active_days (this agent's own last session goal per day):")

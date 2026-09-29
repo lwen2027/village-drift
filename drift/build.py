@@ -250,6 +250,10 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             block.context["prior_snapshot_outline"] = (
                 F.memory_outline(mem_prior["last_content"]) if mem_prior else []
             )
+            block.context["operator_messages_today"] = F.operator_messages_today(
+                chat.get(day, []))
+            block.context["session_goals_today"] = F.session_goals_today(
+                session_goals)
             block.context["prior_active_days"] = F.history_strip(
                 prior_last_goals, goal_text_by_day.get)
 
