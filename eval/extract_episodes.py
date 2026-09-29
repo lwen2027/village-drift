@@ -23,9 +23,20 @@ Stage 1 and Stage 2 answer different questions and need different eval sets:
             table: episodes.jsonl
 
 Mixing them is what produced the conflation this repo kept hitting: multi-day
-investigation leaking into a single-day verdict. 23 of the 50 turning points
+investigation leaking into a single-day verdict.
+
+CORRECTED 2026-09-29. This docstring claimed "23 of the 50 turning points
 recorded during the Stage-1 audits are on a different day than the row they
-were attached to — Stage-2 material filed in a Stage-1 table.
+were attached to". Measured against the current verification.jsonl it is 3 of
+40, across 13 of 100 audit rows. The claim was true of an earlier state of
+the table and was not updated as the audits were completed and cleaned.
+
+The correction inverts what it implies. It is NOT that Stage-2 material was
+being filed in Stage-1 tables at scale — it is that the Stage-1 audits stayed
+almost entirely inside their own day. That is still a reason to build Stage 2,
+but a different one, and it has a consequence: Stage 1 supplies essentially NO
+lower bound on activity_start. Do not expect turning_points to seed the
+window.
 
 ONSET vs TIMELINE START. `onset` is when the DRIFT began; the timeline often
 starts earlier, when the ACTIVITY began while it was still on-goal. Claude Haiku
@@ -77,6 +88,22 @@ def slug(agent: str, day: str) -> str:
 # Fields only a human/Stage-2 pass can fill. The extractor rebuilds an episode
 # from the Stage-1 tables on every run, so without this it would silently wipe
 # them — which it would have done to activity_start on the very next run.
+#
+# activity_start IS NOT DERIVED BY ANYTHING. It starts None and stays None
+# until a human writes it, and it is the field that bounds how much history a
+# Stage-2 pass must read — so the window cannot be sized without first doing
+# the work that sizing the window was supposed to make affordable.
+#
+# The cheap way out, unbuilt: walk BACKWARD over session goals only. They run
+# ~7,245 chars/agent-day against ~256,240 for the full activity, so a 21-day
+# lookback is ~36K tokens rather than ~1.3M, and the activity the agent
+# drifted TO is named in its own session goals on the days it was doing it.
+# activity_start is then the earliest day it appears contiguously.
+#
+# That needs the full dump (~/Documents/ai-village, 4.7G). eval/raw holds only
+# the 58 eval days and they are not contiguous — Claude Haiku 4.5, the worked
+# example above, appears on 5 scattered days there, so the walk cannot be
+# developed or tested against eval/raw alone.
 STAGE2_FIELDS = ("activity_start", "activity_start_note", "onset", "onset_traced",
                  "mechanism", "available_levers", "evidence", "goal", "goal_at")
 
