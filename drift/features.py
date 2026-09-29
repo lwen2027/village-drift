@@ -424,16 +424,10 @@ def repetition_features(block: Block, turns: list[dict], session_goals: list[str
                         and tok not in config.STOPWORDS
                         and tok not in config.SHELL_NOISE):
                     vocab[tok] += 1
-        if vocab:
-            tok, hits = vocab.most_common(1)[0]
-            block.put(
-                "command_topic_concentration",
-                {"token": tok, "in_commands": hits, "of": len(commands),
-                 "share": round(hits / len(commands), 2),
-                 "next": vocab.most_common(4)[1:]},
-                heuristic=True,
-                note="most frequent token across bash commands; topic focus, not repetition",
-            )
+        # command_topic_concentration was computed here, asked of the cheap
+        # model in extract.md, and scored by arena fields() -- and never once
+        # rendered. It is absent from render.SECTIONS, so no judge in any arm
+        # has ever seen it. Removing it changes no payload.
 
     if commands:
         n, seed = largest_cluster(commands, config.REPETITION_THRESHOLD)

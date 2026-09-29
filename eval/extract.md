@@ -61,8 +61,6 @@ ONLY a JSON object with exactly these keys, no prose, no code fence.
  "gaps_over_30min": int,                   // inter-turn gaps longer than 30 min
  "distinct_hosts_touched": int,            // distinct hosts/domains in commands
  "most_touched": [[str, int]],             // host -> count, most frequent first
- "command_topic_concentration": float,     // 0-1, share held by the most
-                                           // frequent token across commands
  "largest_bash_group": {"n": int, "of": int},  // biggest near-identical
                                            // command cluster, and the total
  "session_goal_repetition": {"n": int, "of": int},  // same, over session goals

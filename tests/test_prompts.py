@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.join(ROOT, "eval"))
 
 import arena  # noqa: E402
 
-PROMPTS = ("rubric", "screen", "extract")
+# screen.md went with arm C. rubric.md is the judge, extract.md the
+# cheap stage.
+PROMPTS = ("rubric", "extract")
 
 
 def test_every_prompt_file_exists_and_loads():
