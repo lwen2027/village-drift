@@ -88,13 +88,17 @@ def render(record: dict) -> str:
         ma = ctx.get("goal_actions") or []
         looked = bool(ctx.get("goal_actions_searched"))
         if ma:
-            out.append(f"\ngoal_actions ({len(ma)} action(s) that could move "
-                       f"the assigned metric — acting on it, not reading it):")
+            out.append(f"\ngoal_actions ({len(ma)} action(s) that could advance "
+                       f"the assigned GOAL — acting, not reading, and not work "
+                       f"that cannot reach whatever the goal is about):")
             out.extend(f"  {line}" for line in ma)
         elif looked:
-            out.append("\ngoal_actions: NONE FOUND. The day was searched and "
-                       "contains no action that could move the assigned metric "
-                       "— this is a finding, not missing data.")
+            out.append("\ngoal_actions: NONE FOUND. The day was searched "
+                       "and contains no action that could advance the assigned "
+                       "goal — this is a finding, not missing data. Note this "
+                       "is about the GOAL, not whatever counter tracks it: a "
+                       "counter can be moved by work that cannot touch the "
+                       "goal behind it.")
         else:
             out.append("\ngoal_actions: not determined (the day was not "
                        "searched). This is UNKNOWN, not zero.")
