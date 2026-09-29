@@ -1,27 +1,68 @@
-"""Two-arm bake-off for the Stage-1 labelling method.
+"""Bake-off for the Stage-1 labelling method.
 
-The question: to label 3,979 agent-days, what should a smart judge read?
+The question: to label 4,027 agent-days, what should a smart judge read?
 
-  arm1  mechanical   drift/build.py -> render.py block (~11 KB/day), then judge
-  arm2  cheap-model  the full day -> a cheap model on the monitor's schema,
-                     then the same judge over its structured output
-  arm0  incumbent    app/api/internal/monitor, already run: P .63 R .68 F1 .65
+  A   mechanical    drift/build.py -> render.py block (~19 KB/day), then judge
+  B   cheap-model   the full monitor-style day -> a cheap model fills arm A's
+                    schema -> the same judge over the rendered result
+  C   screen->judge the village's own audit shape: cheap model triages every
+                    day, the judge double-checks only the flagged ones
+  D   context-only  arm A with the 31 computed facts stripped
+  0   incumbent     app/api/internal/monitor, already run in production
 
-arm0 is not just a baseline, it is the ablation that makes arm1 interpretable.
-The production monitor is ALREADY arm1's architecture — `input.ts` drops
-pause/wait via EXCLUDED_ACTIONS and truncates output at MAX_OUTPUT_CHARS=1000,
-which is a deterministic filter feeding claude-opus-4-8 at effort:high. So
-arm1 holds the model family fixed and swaps only the mechanical stage. Beating
-0.65 means the extractor earned its complexity; failing to means it did not.
-Keep the judge in the same family for that reason — an OpenAI judge would
-confound "better compression" with "different model".
+RESULT on 40 rows (37 with a closed goal, 10 drift):
 
-WHY 40 ROWS AND NOT 93. Selecting between two pre-specified arms is one binary
-decision and barely spends a holdout. Iterating — prompt variants, thresholds,
-a third arm — spends it completely, and that is the likely path. So this draws
-40 and leaves 53 defined rows untouched for whatever the real validation turns
-out to need. If you find yourself wanting a 41st row, draw a fresh sample
-instead of widening this one.
+         P     R    F1   acc   $/corpus
+  A    .75   .60   .67   .84       $175
+  B    .86   .60   .71   .84       $191
+  C    .64   .70   .67   .81     $2,022
+  D    .62   .50   .56   .78       $138
+  0    .67   .80   .73   .84     ~$3,980
+
+The experiment did NOT separate the arms on accuracy -- A, B and the
+incumbent tie, and every gap in the table is 1-3 rows at 10 positives. It
+separated them on cost, by 26x. Read it that way.
+
+CHOOSE A, and not because it scored higher. It ties B while being
+deterministic: no model in the extraction stage, so it is reproducible, free
+to re-run, and cannot fail in transit. B only completed at all after the
+Luna call was switched to streaming.
+
+C is the one clear elimination on its own terms: it flags 23 of 37 days
+(precision .43), so it avoids only 38% of judge calls while paying the full
+monitor-view read on EVERY day. The triage does not pay for itself.
+
+The open worry is not arm choice, it is arm A's recall of .60 -- as
+configured it would miss 40% of drift days. The judge's own `confidence`
+looks like the lever (all four misses came back at .62-.72 against a median
+.80 for correct negatives) but the ranking is only weakly separating: the
+worst false alarm scores .85, above six of the ten real drift days.
+
+arm 0 is not just a baseline, it is the ablation that makes arm A
+interpretable. The production monitor is ALREADY arm A's architecture --
+`input.ts` drops pause/wait via EXCLUDED_ACTIONS and truncates output at
+MAX_OUTPUT_CHARS=1000, a deterministic filter feeding claude-opus-4-8 at
+effort:high. So arm A holds the model family fixed and swaps only the
+mechanical stage. Keep the judge in the same family for that reason -- an
+OpenAI judge would confound "better compression" with "different model".
+
+WHY 40 ROWS AND NOT 93. Selecting between pre-specified arms barely spends a
+holdout; iterating -- prompt variants, thresholds, another arm -- spends it
+completely, and that is the likely path. So this draws 40 and leaves 53
+defined rows untouched. If you want a 41st row, draw a fresh sample instead
+of widening this one.
+
+AND DO NOT RE-RUN THIS ON ALL 100 TO SETTLE A VS B. It cannot. At 10
+positives the recall CI is +/-23pt; all 93 defined rows would give ~25
+positives and +/-19pt. Four points cannot resolve a one-row gap, so the
+decision would not move and the holdout would be gone. Spend those rows on
+ONE validation of the finished configuration, which is what they are for.
+
+Two changes are queued for that pass and neither has been measured here, on
+purpose -- both hypotheses came from inspecting these same 40 rows, so
+testing them here would be fitting:
+  * TODAY_GOAL_CHARS 200 -> 400 (config.py). Block +10%.
+  * a confidence threshold on the judge's own self-reported certainty.
 
 Proportional, NOT drift-enriched. Precision moves with prevalence, and arm0's
 0.65 was measured at the natural rate, so enriching would make the one free
@@ -34,6 +75,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import http.client
 import json
 import os
 import random
@@ -274,7 +316,7 @@ def prep(force=False):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["draw", "baseline", "prep", "run", "score", "fields"])
-    ap.add_argument("--arm", choices=["A", "B", "C"])
+    ap.add_argument("--arm", choices=["A", "B", "C", "D"])
     ap.add_argument("--stub", action="store_true",
                     help="exercise the whole path, including scoring, with no "
                          "API calls -- validate the measurement before paying")
@@ -289,7 +331,7 @@ def main() -> int:
 
     if a.cmd == "run":
         if not a.arm:
-            return print("--arm A|B|C") or 1
+            return print("--arm A|B|C|D") or 1
         run(a.arm, stub=a.stub, limit=a.limit)
         return 0
     if a.cmd == "score":
@@ -469,7 +511,7 @@ null — an invented quote is worse than none."""
 
 
 # --------------------------------------------------------------- client ----
-# Synchronous on purpose. The production run over 3,979 days should use the
+# Synchronous on purpose. The production run over 4,027 days should use the
 # Batch API instead — 50% off, and this workload is the ideal shape for it
 # (independent calls, no latency requirement). At n=40 batch would save a
 # couple of dollars and cost submit/poll/retrieve machinery plus up to 24h of
@@ -526,7 +568,16 @@ def _post(url, payload, headers, timeout=300, tries=4):
                 raise
             last = exc
             time.sleep(2 ** attempt * 5)
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, http.client.HTTPException,
+                ConnectionError, TimeoutError) as exc:
+            # RemoteDisconnected is an http.client exception, NOT a URLError,
+            # so it escaped both handlers and failed the row outright: 5 of
+            # arm B's first 19 rows died that way. Arm B is the arm that
+            # provokes it -- it asks the cheap model to emit the whole block,
+            # verbatim Context included, and the longer the generation the
+            # likelier the connection drops mid-stream. Losing a quarter of
+            # the rows to that would have been read as arm B being unable to
+            # do the task.
             if attempt == tries - 1:
                 raise
             last = exc
@@ -537,7 +588,47 @@ def _post(url, payload, headers, timeout=300, tries=4):
 def _post_once(url, payload, headers, timeout=300):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json", **headers})
-    return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+    resp = urllib.request.urlopen(req, timeout=timeout)
+    if not payload.get("stream"):
+        return json.loads(resp.read())
+    return _read_sse(resp)
+
+
+def _read_sse(resp):
+    """Collect an OpenAI-style SSE stream into the same dict a normal
+    response returns, so callers cannot tell the difference.
+
+    Arm B's largest rows are ~470K input tokens, and at the measured rate
+    (41K in + 7K out = 120s) a non-streaming request of that size sits silent
+    for many minutes before its first byte. The server closes the connection
+    first and urllib reports RemoteDisconnected "without response", which
+    reads like the model refusing the task. It is not: the same row succeeds
+    on a smaller input. Streaming keeps bytes flowing so nothing times the
+    socket out. Compressing the input would "fix" it too, but arm B exists to
+    show the cheap model the SAME full day the village monitor sees -- cutting
+    that to suit the transport would silently turn it into a weaker arm A.
+    """
+    chunks, usage = [], {}
+    for raw in resp:
+        line = raw.decode("utf-8", "replace").strip()
+        if not line.startswith("data:"):
+            continue
+        body = line[5:].strip()
+        if body == "[DONE]":
+            break
+        try:
+            d = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        # The usage chunk arrives last and carries no choices.
+        if d.get("usage"):
+            usage = d["usage"]
+        for ch in d.get("choices") or []:
+            piece = (ch.get("delta") or {}).get("content")
+            if piece:
+                chunks.append(piece)
+    return {"choices": [{"message": {"content": "".join(chunks)}}],
+            "usage": usage}
 
 
 # The biggest digest in the 40-row sample is ~80K tokens and three rows clear
@@ -601,9 +692,15 @@ def call(model, system, user, stub=False):
     key = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not key:
         raise SystemExit("OPENAI_API_KEY unset")
-    d = _post(OPENAI, {"model": model, "messages": [
-        {"role": "system", "content": system}, {"role": "user", "content": user}]},
-        {"Authorization": f"Bearer {key}"})
+    # stream_options.include_usage keeps the reported usage figures -- without
+    # it a streamed response carries no usage block and every cost number for
+    # this arm would silently become zero.
+    d = _post(OPENAI, {"model": model, "stream": True,
+                       "stream_options": {"include_usage": True},
+                       "messages": [
+                           {"role": "system", "content": system},
+                           {"role": "user", "content": user}]},
+              {"Authorization": f"Bearer {key}"}, timeout=1800)
     u = d.get("usage", {})
     return (d["choices"][0]["message"]["content"],
             {"input_tokens": u.get("prompt_tokens"),
@@ -777,6 +874,41 @@ def arm_input(arm, agent, day):
     human reading time, not judge accuracy, which is a live confound if B or C
     loses narrowly.
     """
+    if arm == "D":
+        # Context-only: arm A with every DERIVED fact stripped, keeping the
+        # four that are lookups rather than computations. Asks whether the
+        # 930 lines of features.py earn their keep -- the facts are 13% of
+        # the block, and tracing each decisive quote back to the section it
+        # came from, session_goals_today supplies it in 78% of arm A's
+        # verdicts against 2% or less for every other context section.
+        #
+        # ANSWER: they do, narrowly. D scored 0.78 against A's 0.84, and the
+        # two arms disagree on only 2 of 37 rows, both going A's way. That is
+        # inside the noise band, so the fair reading is "removing them did
+        # not help" rather than "they are load-bearing". The saving is 23%,
+        # which on a $175 corpus is not a reason to do anything.
+        #
+        # Keep the arm. It is the standing check that citation frequency is
+        # not importance: the 31 facts supply the decisive quote in 20% of
+        # verdicts (8 rows, 3 of them goal_is_open on open goals), and
+        # predicting from that that they were idle was wrong.
+        #
+        # `assigned`, `assigned_description`, `room` and `goal_is_open` stay:
+        # they are reads of the assignment, not statistics over the day, and
+        # without the goal there is nothing to judge against. `room` is the
+        # weak one -- it renders "(observed in chat)", so it is arguably a
+        # derivation and fails the rule it was selected by.
+        from drift import render as _R
+        with open(os.path.join(BLOCKS, f"{_safe(agent)}__{day}.json")) as fh:
+            rec = json.load(fh)
+        keep = ("assigned", "assigned_description", "room", "goal_is_open")
+        return _R.render({
+            "agent": rec["agent"], "day": rec["day"],
+            "facts": {k: v for k, v in (rec.get("facts") or {}).items()
+                      if k in keep},
+            "context": rec.get("context") or {},
+        })
+
     if arm == "A":
         path = os.path.join(BLOCKS, f"{_safe(agent)}__{day}.txt")
         if not os.path.exists(path):
@@ -887,7 +1019,14 @@ def run(arm, stub=False, limit=None):
                "salvaged": False, "error": None}
         try:
             src = arm_input(arm, agent, day)
-            if arm == "A":
+            # A and D are single-stage: the block goes straight to the judge.
+            # D was briefly absent from this test and fell through to the cheap
+            # stage, where it drew screen.md and then line "payload = json.dumps(obj)"
+            # -- so its judge read Luna's screening verdict instead of the block,
+            # and said so in its own reasoning ("my input is a prior reviewer's
+            # summary"). It scored 0.72 and the number meant nothing. Any new
+            # single-stage arm must be added here.
+            if arm in ("A", "D"):
                 payload = src
             else:
                 if not MODELS["cheap"]:
@@ -945,10 +1084,12 @@ def run(arm, stub=False, limit=None):
                         # uses, so the judge cannot tell which arm it is serving.
                         # The first version sent raw JSON of the facts only --
                         # 3,195 of arm A's 25,547 chars, omitting every verbatim
-                        # Context section. Since arm A's judge cites those in 90%
-                        # of verdicts and the computed fields in ~2%, arm B was
-                        # asked to reproduce the part that does not decide
-                        # anything and judged on the result.
+                        # Context section. Tracing each decisive quote back to
+                        # the section it came from: session_goals_today supplies
+                        # it in 78% of arm A's verdicts and a computed field in
+                        # 20% (8 rows -- 3 of them goal_is_open on open goals).
+                        # So arm B was asked to reproduce the 13% of the block
+                        # that rarely decides anything, and judged on the result.
                         from drift import render as _R
                         ctx_keys = ("session_goals_today", "operator_messages_today",
                                     "goal_announcement", "outreach_constraints")
@@ -993,7 +1134,7 @@ def _prf(tp, fp, fn):
     return p, r, (2 * p * r / (p + r) if p + r else 0.0)
 
 
-def score(arms=("A", "B", "C")):
+def score(arms=("A", "B", "C", "D")):
     gold = {(r["agent"], r["day"]): r for r in _load(SAMPLE)}
     print(f"{'arm':4s} {'n':>3} {'P':>5} {'R':>5} {'F1':>5} {'acc':>5} "
           f"{'abst':>5} {'quote ok':>9} {'salv':>5} {'in tok':>10} {'out tok':>9} "
@@ -1005,6 +1146,7 @@ def score(arms=("A", "B", "C")):
             continue
         tp = fp = fn = tn = 0
         abst_ok = abst_n = salv = errs = 0
+        undef_bad = 0
         prov = collections.Counter()
         tin = tout = tcache = 0
         spend = 0.0
@@ -1017,8 +1159,22 @@ def score(arms=("A", "B", "C")):
                 tcache += u.get("cache_read_input_tokens") or 0
                 pr = PRICES.get(c.get("model"))
                 if pr:
+                    # Cache reads bill at 0.1x base and cache WRITES at 1.25x;
+                    # both were priced at zero here, so every cached arm looked
+                    # cheaper than it is. Worth ~2% on arms B and D and nothing
+                    # on A and C, which recorded no cache activity at all.
+                    #
+                    # cache_creation is 0 on every call in this sample, which is
+                    # not "writes are free" -- it means the prefix was already
+                    # warm from an earlier run whose records were deleted. A
+                    # cold production run pays the write once per distinct
+                    # prefix, so do not read a 0 here as the steady state.
                     spend += ((u.get("input_tokens") or 0) / 1e6 * pr["in"]
-                              + (u.get("output_tokens") or 0) / 1e6 * pr["out"])
+                              + (u.get("output_tokens") or 0) / 1e6 * pr["out"]
+                              + (u.get("cache_read_input_tokens") or 0)
+                              / 1e6 * pr["in"] * 0.1
+                              + (u.get("cache_creation_input_tokens") or 0)
+                              / 1e6 * pr["in"] * 1.25)
                 tout += u.get("output_tokens") or 0
             salv += bool(rec.get("salvaged"))
             if rec.get("error"):
@@ -1033,13 +1189,22 @@ def score(arms=("A", "B", "C")):
                 abst_n += 1
                 abst_ok += str(pred).lower() == "undefined"
                 continue
+            if str(pred).lower() == "undefined":
+                # The goal is CLOSED here, so the rubric's one licensed use of
+                # `undefined` does not apply -- this is a non-answer. It used
+                # to fall through to `yes = False` and be counted as a correct
+                # negative, which handed an arm a point for declining to
+                # answer. Only arm B did it, once, and that single free credit
+                # was the whole of its 0.86-vs-0.84 lead over arm A.
+                undef_bad += 1
+                continue
             yes = pred is True or str(pred).lower() == "true"
             tp += g["is_drift"] and yes
             fn += g["is_drift"] and not yes
             fp += (not g["is_drift"]) and yes
             tn += (not g["is_drift"]) and not yes
         p, r, f1 = _prf(tp, fp, fn)
-        n = tp + fp + fn + tn
+        n = tp + fp + fn + tn + undef_bad
         ok = prov["located"]
         tot = sum(prov[k] for k in ("located", "NOT_FOUND"))
         print(f"{arm:4s} {n:3d} {p:5.2f} {r:5.2f} {f1:5.2f} "

@@ -557,7 +557,7 @@ def session_goals_today(goals: list[str]) -> list[str]:
     """
     out: list[str] = []
     for g in goals:
-        text = " ".join(str(g).split())[: config.HISTORY_GOAL_CHARS]
+        text = " ".join(str(g).split())[: config.TODAY_GOAL_CHARS]
         if out and out[-1][1] == text:
             out[-1][0] += 1
         else:

@@ -1,4 +1,5 @@
 """Unit tests for the parts that have silently broken before."""
+from drift import config
 from drift import features as F
 from drift.load import split_messages
 
@@ -118,7 +119,28 @@ def test_todays_session_goals_are_in_the_block():
     # an earlier intent is behaviour, not formatting.
     assert out == ["x3  ship the thing", "review PRs", "ship the thing"]
     assert F.session_goals_today([]) == []
-    assert len(F.session_goals_today(["q" * 500])[0]) == 200
+    assert len(F.session_goals_today(["q" * 900])[0]) == config.TODAY_GOAL_CHARS
+
+
+def test_today_and_history_goal_caps_are_separate_knobs():
+    """They shared HISTORY_GOAL_CHARS, which was wrong in both directions.
+
+    Today's session goals decide 78% of arm A's verdicts; the history strip is
+    cross-day and rule 4 forbids it carrying one. Tuning the decisive field
+    therefore silently resized the one that cannot matter, and vice versa. At
+    the shared value of 200 the block kept 13% of today's session-goal text
+    and cut 61% of goals mid-sentence -- these are working-memory dumps
+    averaging 1,270 chars, not one-line goals.
+
+    This asserts they are INDEPENDENT, not that either holds a given value:
+    the point is that moving one must not move the other.
+    """
+    assert config.TODAY_GOAL_CHARS != config.HISTORY_GOAL_CHARS
+    long = "z" * 5000
+    assert len(F.session_goals_today([long])[0]) == config.TODAY_GOAL_CHARS
+    strip = F.history_strip([("2026-01-01", long)])
+    # "YYYY-MM-DD  " prefix, then the history cap
+    assert len(strip[0]) == 12 + config.HISTORY_GOAL_CHARS
     # whitespace is normalised BEFORE comparison, or near-identical goals
     # differing only in wrapping fail to collapse
     assert F.session_goals_today(["  a   b ", "a b"]) == ["x2  a b"]

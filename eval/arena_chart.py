@@ -1,10 +1,15 @@
 """Render the bake-off result as an SVG — cost against accuracy.
 
-Deliberately NOT a single cost/accuracy ratio. That collapses two dimensions
-and would hide the most important thing in the data: arm B is worse on BOTH,
-which a ratio renders as one middling number. A Pareto scatter shows
-domination directly — the arm that is up and to the left wins outright, and
-an arm that is down and to the right has no argument left.
+Deliberately NOT a single cost/accuracy ratio. A ratio collapses two
+dimensions into one middling number and hides which of them is moving. A
+Pareto scatter shows domination directly — the arm that is up and to the
+left wins outright, and an arm down and to the right has no argument left.
+
+The first version of this chart plotted arm B at 0.70 and the note called it
+"the exception that is not a tie". That was an artefact: arm B had been given
+a schema containing 3,195 of arm A's 25,547 chars and no Context sections at
+all. Re-run with parity it scores 0.84, the same as arm A. The lesson is in
+the file because the chart was persuasive while it was wrong.
 
 Cost is computed per MODEL, not per arm, because the arms split their spend
 very differently: arm C sends 47% of its input to the expensive judge (a
@@ -35,11 +40,12 @@ from arena import PRICES  # noqa: E402
 # Measured on the 40-row sample. Accuracy is over the 37 DEFINED rows;
 # open-goal rows are scored separately as abstention and excluded here,
 # because "undefined" is not a class in a binary confusion matrix.
-ACC = {"A": 0.84, "B": 0.70, "C": 0.81, "0": 0.84}
+ACC = {"A": 0.84, "B": 0.84, "C": 0.81, "D": 0.78, "0": 0.84}
 LABEL = {
     "A": "A  mechanical block",
-    "B": "B  model-computed facts",
+    "B": "B  cheap model fills the schema",
     "C": "C  screen → judge",
+    "D": "D  context only, facts stripped",
     "0": "0  incumbent monitor",
 }
 # Arm 0 ran in production, so there is no usage record. Estimated from its
@@ -77,6 +83,8 @@ def measured():
             u = c.get("usage") or {}
             out[r["arm"]][c["model"]]["in"] += u.get("input_tokens") or 0
             out[r["arm"]][c["model"]]["out"] += u.get("output_tokens") or 0
+            out[r["arm"]][c["model"]]["read"] += u.get("cache_read_input_tokens") or 0
+            out[r["arm"]][c["model"]]["write"] += u.get("cache_creation_input_tokens") or 0
             if c["stage"] == "judge":
                 jc[r["arm"]] += 1
     out["0"] = {m: collections.Counter(v) for m, v in ARM0_EST.items()}
@@ -85,16 +93,30 @@ def measured():
 
 
 def cost(by_model, judge_calls=0):
-    """None if any needed price is missing — better no number than a made-up one."""
+    """None if any needed price is missing — better no number than a made-up one.
+
+    Cache reads bill at 0.1x and writes at 1.25x. An earlier version counted
+    both as FREE and then also subtracted the assumed rubric discount, so any
+    arm that genuinely cached was discounted twice: arm D came out at $111
+    against the scorer's $138. Arms B and D carry real cache_read figures;
+    A and C ran before caching engaged and carry none.
+    """
     total = 0.0
     for model, tok in by_model.items():
         tok = dict(tok)
-        if judge_calls and model == "claude-opus-5-5":
-            tok["in"] = tok["in"] - RUBRIC_TOKENS * judge_calls * 0.9
         p = PRICES.get(model)
         if not p or p["in"] is None or p["out"] is None:
             return None
-        total += tok["in"] / 1e6 * p["in"] + tok["out"] / 1e6 * p["out"]
+        # The rubric caches on ~90% of judge calls at scale. Credit only the
+        # part NOT already sitting in measured reads, or the same saving is
+        # taken twice.
+        if judge_calls and model == "claude-opus-5-5":
+            assumed = RUBRIC_TOKENS * judge_calls * 0.9
+            tok["in"] = max(0.0, tok["in"] - max(0.0, assumed - tok.get("read", 0)))
+        total += (tok["in"] / 1e6 * p["in"]
+                  + tok["out"] / 1e6 * p["out"]
+                  + tok.get("read", 0) / 1e6 * p["in"] * 0.1
+                  + tok.get("write", 0) / 1e6 * p["in"] * 1.25)
     return total
 
 
@@ -172,43 +194,62 @@ def svg():
     # A and arm 0 land on the same accuracy. That is the finding, so draw it
     # rather than leaving the reader to notice two dots share a gridline.
     if ACC["A"] == ACC["0"]:
-        x1, x2, yy = px(xval["A"]), px(xval["0"]), py(ACC["A"])
+        # A and B tie on accuracy AND land within 9% on cost, so their markers
+        # nearly coincide. Start the rule to the right of BOTH, or it is drawn
+        # straight through whichever sits further right.
+        tied = [px(xval[a]) for a in ACC if ACC[a] == ACC["A"] and a != "0"]
+        x1, x2, yy = max(tied), px(xval["0"]), py(ACC["A"])
         s.append(f'<line x1="{x1+14:.1f}" y1="{yy:.1f}" x2="{x2-14:.1f}" '
                  f'y2="{yy:.1f}" stroke="#1a7f5a" stroke-width="1.4" '
                  f'stroke-dasharray="6 4" opacity="0.55"/>')
-        mult = xval["0"] / xval["A"]
-        s.append(f'<text x="{x1 + (x2-x1)*0.66:.1f}" y="{yy-13:.1f}" text-anchor="middle" '
+        mult = xval["0"] / min(xval[a] for a in ACC
+                               if ACC[a] == ACC["A"] and a != "0")
+        s.append(f'<text x="{x1 + (x2-x1)*0.75:.1f}" y="{yy-13:.1f}" text-anchor="middle" '
                  f'font-size="12.5" font-weight="600" fill="#1a7f5a">'
                  f'same accuracy, {mult:.0f}x the cost</text>')
 
-    colour = {"A": "#1a7f5a", "B": "#b03030", "C": "#c98a1e", "0": "#5a6b8c"}
-    for a in ("B", "C", "0", "A"):
+    colour = {"A": "#1a7f5a", "B": "#1a7f5a", "C": "#c98a1e",
+              "D": "#b03030", "0": "#5a6b8c"}
+    for a in ("D", "C", "B", "0", "A"):
         x, y = px(xval[a]), py(ACC[a])
         est = a == "0"
         s.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{11 if a=="A" else 9}" '
                  f'fill="{"none" if est else colour[a]}" stroke="{colour[a]}" '
                  f'stroke-width="{2.5 if est else 1}" '
                  f'{"stroke-dasharray=\'4 3\'" if est else ""}/>')
-        # arm 0 and arm C are within a hair of each other on x, so their
-        # labels must not both sit on the same side of the marker.
+        # A and B tie on accuracy and sit within 9% on cost, so their markers
+        # nearly overlap. Separate the labels VERTICALLY and keep both to the
+        # right: an earlier version put A's label to the LEFT, where it ran
+        # back under the y-axis tick labels. A goes up far enough that its
+        # cost string clears B's marker; B goes down far enough to clear the
+        # arm-0 caching note, with a leader line saying which dot is which.
         up = a in ("A", "0")
-        nudge = -22 if a == "0" else 0
-        s.append(f'<text x="{x+15:.1f}" y="{y + nudge + (-6 if up else 18):.1f}" '
-                 f'font-weight="600" fill="{colour[a]}">{LABEL[a]}'
+        nudge = {"0": -22, "A": -20, "B": 44}.get(a, 0)
+        tx = x + 15
+        anchor = ""
+        # A label pushed this far from its marker needs a leader, or the
+        # reader cannot tell which of the two adjacent green dots it names.
+        if abs(nudge) > 30:
+            s.append(f'<line x1="{x:.1f}" y1="{y + 11:.1f}" x2="{x:.1f}" '
+                     f'y2="{y + nudge + 6:.1f}" stroke="{colour[a]}" '
+                     f'stroke-width="1" opacity="0.35"/>')
+        s.append(f'<text x="{tx:.1f}" y="{y + nudge + (-6 if up else 18):.1f}"'
+                 f'{anchor} font-weight="600" fill="{colour[a]}">{LABEL[a]}'
                  f'{" (est.)" if est else ""}</text>')
         v = xval[a]
         # cents matter at this end of the scale: arms A and B both round to
         # "$2" and the whole point is that they differ.
         sub = (f'${v:,.0f}  ·  ${v/CORPUS_DAYS:.3f}/day' if priced else
                (f'{v/1e6:,.0f}M tok' if v >= 1e6 else f'{v/1e3:,.0f}K tok'))
-        s.append(f'<text x="{x+15:.1f}" y="{y + nudge + (10 if up else 34):.1f}" '
-                 f'font-size="11.5" fill="#777">{sub}</text>')
+        s.append(f'<text x="{tx:.1f}" y="{y + nudge + (10 if up else 34):.1f}"'
+                 f'{anchor} font-size="11.5" fill="#777">{sub}</text>')
 
-    note = ("Accuracy differences between A, C and the incumbent are within "
-            "sampling noise at 10 drift days — treat them as tied. Cost is not "
-            "noisy: it is measured, and separates them by more than an order of "
-            "magnitude. Arm B is the exception that is not a tie; its recall of "
-            "0.10 falls below simply answering “not drift” every time.")
+    note = ("A, B and the incumbent all score 0.84; C and D sit a little "
+            "below, still inside the ±23pt band that 10 drift days buys. Treat "
+            "every accuracy gap here as a tie. Cost is not noisy — it is "
+            "measured, and separates the arms by more than an order of "
+            "magnitude, so it is what should decide. A and B tie on accuracy "
+            "and nearly on cost; A wins on being deterministic.")
     for i, line in enumerate(_wrap(note, 108)):
         s.append(f'<text x="{L}" y="{H-72+i*16}" font-size="11.5" fill="#555">'
                  f'{line}</text>')
