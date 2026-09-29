@@ -65,7 +65,6 @@ attribute a moved number to.
     python3 eval/arena.py baseline   # arm0 on exactly those rows
     python3 eval/arena.py run --arm B
     python3 eval/arena.py score
-    python3 eval/arena.py fields     # cheap model vs the mechanical block
 """
 from __future__ import annotations
 
@@ -179,132 +178,29 @@ def baseline(picked: list[dict]) -> None:
     print("  (full 93: P .63 R .68 F1 .65 acc .81)")
 
 
-def fields():
-    """Measurement 2: A vs B, field by field.
-
-    Both arms emit the same schema, and for anything arithmetic the code is
-    ground truth by construction -- turns_raw is a count, not an opinion. So
-    this answers "can a cheap model do the counting" directly, over every
-    field of every row rather than over 40 verdicts, which makes it the one
-    measurement here that is not noise-limited.
-    """
-    rows = _load(SAMPLE)
-    agree = collections.Counter()
-    total = collections.Counter()
-    for r in rows:
-        f = os.path.join(RUNS, f"B__{_safe(r['agent'])}__{r['day']}.json")
-        if not os.path.exists(f):
-            continue
-        got = (json.load(open(f)) or {}).get("cheap_output")
-        if not isinstance(got, dict):
-            continue
-        cached = os.path.join(BLOCKS, f"{_safe(r['agent'])}__{r['day']}.json")
-        if not os.path.exists(cached):
-            continue
-        truth = (json.load(open(cached)) or {}).get("facts") or {}
-        # Only score fields arm B was actually ASKED for. Seven fields were
-        # removed from its schema as underivable from one day; counting their
-        # absence as error measures my prompt, not the model.
-        # [a-z0-9_], not [a-z_]: the original could not match a digit, so
-        # gaps_over_30min was dropped from `asked` and silently never scored
-        # -- ground truth existed and Luna answered it on all 40 rows. A
-        # field can vanish from an audit because of a character class.
-        asked = set(re.findall(r'"([a-z0-9_]+)"\s*:', prompt("extract")))
-        for k, want in truth.items():
-            if k not in asked:
-                continue
-            if isinstance(want, dict):
-                want = want.get("value")
-            if k not in got:
-                total[k] += 1
-                continue
-            total[k] += 1
-            mine = got[k]
-            if isinstance(want, bool) or isinstance(mine, bool):
-                # BEFORE ANY NUMERIC BRANCH. bool subclasses int, so True/False
-                # fell through to the tolerance below, where max(1, 5%) permits
-                # a difference of exactly 1 -- which is the entire range of a
-                # boolean. Every bool comparison passed regardless of value.
-                #
-                # goal_is_open read 100% because of it. It is False in the
-                # block on all six of arm B's error rows and the cheap model
-                # returned True on all six, which is 0%, and those six errors
-                # ARE arm B's whole error set: every one of its wrong verdicts
-                # argues with a goal_is_open it was handed wrong.
-                agree[k] += bool(mine) == bool(want)
-            elif isinstance(want, (int, float)) and isinstance(mine, (int, float)):
-                # Tolerance has to suit the scale. `max(1, 5%)` was wrong: on
-                # a 0-1 ratio it permits ANY value, so assigned_goal_words_present
-                # scored 100% while returning 0.83 against a true 0.29.
-                if isinstance(want, float) and 0.0 <= want <= 1.0:
-                    agree[k] += abs(mine - want) <= 0.05        # absolute
-                else:
-                    agree[k] += abs(mine - want) <= max(1, abs(want) * 0.05)
-            else:
-                # Normalise before comparing, or the diff measures formatting.
-                # "#general" vs "general" and "18:04:58-22:01" vs "18:04-22:01"
-                # were scoring as errors, which made room (5%) and span (2%)
-                # look like failures of counting rather than of punctuation.
-                def _n(x):
-                    x = re.sub(r"[#\s]", "", str(x).lower())
-                    x = re.sub(r"[–—]", "-", x)
-                    x = re.sub(r"(\d\d:\d\d):\d\d", r"\1", x)   # HH:MM:SS -> HH:MM
-                    return x
-                agree[k] += _n(mine) == _n(want)
-    if not total:
-        print("no arm-B runs yet")
-        return
-    print(f"{'field':38s} {'agree':>7}  {'n':>3}")
-    for k in sorted(total, key=lambda k: agree[k] / total[k]):
-        print(f"{k:38s} {agree[k] / total[k]:6.0%}  {total[k]:3d}")
-    n, a = sum(total.values()), sum(agree.values())
-    print(f"\ncomputed facts only: {a}/{n} = {a / n:.1%}")
-
-    # The four Context sections live in block.context, not block.facts, so the
-    # loop above silently skips them and the number printed is NOT "how good
-    # is the cheap model" -- it is "how good is it at arithmetic". Reporting
-    # only that badly misleads: the judge takes its decisive quote from
-    # session_goals_today in 78% of arm B's verdicts and from a computed field
-    # in 20%, so the 30% figure describes the part that rarely decides
-    # anything. Scored against the RAW day rather than against arm A's block,
-    # because arm A truncates and the question here is fidelity, not match.
-    raw_ok = raw_bad = 0
-    for r in rows:
-        f = os.path.join(RUNS, f"B__{_safe(r['agent'])}__{r['day']}.json")
-        src = os.path.join(HERE, "raw", r["day"], f"{_safe(r['agent'])}.json")
-        if not (os.path.exists(f) and os.path.exists(src)):
-            continue
-        got = (json.load(open(f)) or {}).get("cheap_output")
-        if not isinstance(got, dict):
-            continue
-        def _flat(x):
-            return " ".join(str(x).split()).lower()
-        truth = _flat(" || ".join(str(s.get("session_goal") or "")
-                                  for s in (json.load(open(src)).get("sessions") or [])))
-        items = got.get("session_goals_today") or []
-        if not isinstance(items, list):
-            items = [items]
-        for it in items:
-            t = _flat(it)
-            # strip the "x3  " repeat marker, THEN the "16:26  " timestamp the
-            # monitor view prefixes. Doing it in the other order, or with
-            # lstrip("x0123456789 "), eats the hour out of the clock and
-            # reports 73% faithful instead of 98%.
-            t = re.sub(r"^x\d+\s+", "", t)
-            t = re.sub(r"^\d{1,2}:\d{2}(:\d{2})?\s+", "", t)
-            if len(t) < 25:
-                continue
-            if t[:60] in truth:
-                raw_ok += 1
-            else:
-                raw_bad += 1
-    if raw_ok or raw_bad:
-        tot = raw_ok + raw_bad
-        print(f"session_goals_today verbatim in the raw day: "
-              f"{raw_ok}/{tot} = {raw_ok / tot:.1%}")
-        print("\n  Copying is what the cheap model is for; arithmetic is not.")
-
-
+# fields() lived here. It scored the cheap model's computed output against
+# the mechanical block, and its verdict is why that output no longer exists:
+#
+#     copying verbatim text                         98%
+#     lookups (assigned 92%, goal_is_open 100%*)
+#     small salient counts (gaps_over_30min)        88%
+#     small counts (chat_sent)                      78%
+#     running totals (turns_raw, turns_kept)       8-10%
+#     aggregation (most_touched, action_mix)         0%
+#     overall                                       28%
+#
+# * goal_is_open read 100% for months and is 8%. bool subclasses int in
+#   Python, so booleans fell through the numeric branch, where the tolerance
+#   max(1, 5%) permits a difference of exactly 1 -- a boolean's entire range.
+#   Every bool comparison passed whatever the values were. That one field was
+#   the cheap arm's entire error set.
+#
+# Removed because the cheap stage now answers three keys and none of them has
+# a mechanical counterpart to score against, so the function could only ever
+# print "no arm-B runs yet" on a directory full of arm-B runs.
+#
+# If a future change asks the cheap model to compute something again, restore
+# this from git BEFORE trusting the result, and fix the bool branch first.
 
 
 def prep(force=False):
@@ -344,7 +240,7 @@ def prep(force=False):
             stem = os.path.join(BLOCKS, f"{_safe(k[0])}__{k[1]}")
             with open(stem + ".txt", "w") as fh:
                 fh.write(txt)
-            # The structured record too: fields() needs the facts dict, and
+            # The structured record too: the hybrid arm renders from it, and
             # rebuilding it there would reintroduce the per-row full scan this
             # whole step exists to remove.
             with open(stem + ".json", "w") as fh:
@@ -372,7 +268,7 @@ def prep(force=False):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["draw", "baseline", "prep", "run", "score", "fields"])
+    ap.add_argument("cmd", choices=["draw", "baseline", "prep", "run", "score"])
     ap.add_argument("--arm", choices=["A", "B"])
     ap.add_argument("--stub", action="store_true",
                     help="exercise the whole path, including scoring, with no "
@@ -393,9 +289,6 @@ def main() -> int:
         return 0
     if a.cmd == "score":
         score()
-        return 0
-    if a.cmd == "fields":
-        fields()
         return 0
     if a.cmd == "baseline":
         if not os.path.exists(SAMPLE):
@@ -1061,86 +954,44 @@ def run(arm, stub=False, limit=None):
                 rec["cheap_output"] = obj if obj is not None else text
                 if True:
                     if arm == "B" and isinstance(obj, dict):
-                        # Render arm B's output through the SAME renderer arm A
-                        # uses, so the judge cannot tell which arm it is serving.
-                        # The first version sent raw JSON of the facts only --
-                        # 3,195 of arm A's 25,547 chars, omitting every verbatim
-                        # Context section. Tracing each decisive quote back to
-                        # the section it came from: session_goals_today supplies
-                        # it in 78% of arm A's verdicts and a computed field in
-                        # 20% (8 rows -- 3 of them goal_is_open on open goals).
-                        # So arm B was asked to reproduce the 13% of the block
-                        # that rarely decides anything, and judged on the result.
+                        # THE HYBRID: arm A's mechanical block, plus the two
+                        # fields only a reader of the raw day can supply.
+                        #
+                        # This used to render the cheap model's OWN version of
+                        # the block. It cannot compete: code holds 21 of the
+                        # 33 keys it was asked for EXACTLY, and the model
+                        # reproduces computed facts at 28% and verbatim
+                        # sections at 75-98%. Every one of those is a loss.
+                        #
+                        # goal_is_open was the sharpest case. Pure lookup,
+                        # 0 disagreements with the gold labels across 40 rows
+                        # from code, 3 of 40 right from the model -- it reads
+                        # the umbrella announcement ("pursue your goal in any
+                        # way you see fit") as an open goal when the assigned
+                        # goal is specific. That single field was arm B's
+                        # entire error set: all six wrong verdicts argue with
+                        # it in their own reasoning.
+                        #
+                        # So the model now answers three keys and nothing
+                        # else, and the judge cannot tell which arm it serves
+                        # because the block is byte-identical to arm A's
+                        # except for two added Context sections.
                         from drift import render as _R
-                        ctx_keys = ("session_goals_today", "operator_messages_today",
-                                    "goal_announcement", "outreach_constraints",
-                                    "metric_actions", "metric_actions_searched",
-                                    "peer_requests", "goal_period_messages",
-                                    "prior_snapshot_outline", "prior_active_days")
-                        # ENFORCE the framing rather than asking for it. Told
-                        # "truncate to 200 chars", the cheap model obeyed on 6%
-                        # of entries and exceeded it on 56%, running to 3,484 --
-                        # a mean of 314 against arm A's 200. So the two arms
-                        # were compared at different budgets on the field
-                        # supplying 78% of both arms' decisive quotes. A cap in
-                        # a prompt is a request; this is the cap.
-                        #
-                        # Session goals get the same whole-DAY budget arm A
-                        # uses and NO per-goal cap: truncating the decisive
-                        # field per-goal cuts the agent's own record of what it
-                        # worked on. Operator messages keep their 600 -- they
-                        # are short, and 600 holds the longest real correction
-                        # in the sample.
-                        obj = dict(obj)
-                        # LOOKUPS COME FROM CODE, NOT THE MODEL. goal_is_open
-                        # is read off the goals table by a marker match and
-                        # disagrees with the gold labels on 0 of 40 rows. The
-                        # cheap model, asked to re-derive it from the day, gets
-                        # it right on 3 of 40 -- it reads the umbrella
-                        # announcement ("pursue your goal in any way you see
-                        # fit") as an open goal when the assigned goal is
-                        # specific.
-                        #
-                        # That single field is arm B's whole error set. All six
-                        # of its wrong verdicts argue with the flag in their own
-                        # reasoning -- "the goal_is_open: True field looks
-                        # mislabelled", "it is flagged goal_is_open, but the
-                        # metric is fixed" -- and one of them abstained on a
-                        # closed goal because of it.
-                        #
-                        # This makes arm B a HYBRID, not a pure cheap-model
-                        # arm, and that is deliberate now that it is a
-                        # production candidate rather than a comparison. Asking
-                        # a model to redo a correct lookup has no upside.
                         _blk = os.path.join(BLOCKS, f"{_safe(agent)}__{day}.json")
-                        if os.path.exists(_blk):
-                            _f = (json.load(open(_blk)).get("facts") or {})
-                            for _k in ("goal_is_open", "assigned",
-                                       "assigned_description", "room"):
-                                if _k in _f:
-                                    obj[_k] = (_f[_k] or {}).get("value")
-                            # Mechanical context the cheap model cannot see:
-                            # it lives on days outside the one it was given.
-                            _c = (json.load(open(_blk)).get("context") or {})
-                            for _k in ("goal_period_messages",
-                                       "prior_snapshot_outline",
-                                       "prior_active_days"):
-                                if _c.get(_k):
-                                    obj[_k] = _c[_k]
-                        _sg = obj.get("session_goals_today")
-                        if isinstance(_sg, list):
-                            obj["session_goals_today"] = F._fit_day_budget(
-                                [" ".join(str(x).split()) for x in _sg if str(x).strip()])
-                        _om = obj.get("operator_messages_today")
-                        if isinstance(_om, list):
-                            obj["operator_messages_today"] = [
-                                str(x)[: config.OPERATOR_MSG_CHARS] for x in _om]
-                        payload = _R.render({
-                            "agent": agent, "day": day,
-                            "facts": {k: {"value": v} for k, v in obj.items()
-                                      if k not in ctx_keys},
-                            "context": {k: obj.get(k) for k in ctx_keys},
-                        })
+                        if not os.path.exists(_blk):
+                            raise SystemExit(
+                                f"no cached block for {agent} {day} -- run prep")
+                        rec = json.load(open(_blk))
+                        rec.setdefault("context", {})
+                        ma = obj.get("metric_actions")
+                        rec["context"]["metric_actions"] = (
+                            ma if isinstance(ma, list) else [])
+                        rec["context"]["metric_actions_searched"] = bool(
+                            obj.get("metric_actions_searched"))
+                        pr = obj.get("peer_requests")
+                        rec["context"]["peer_requests"] = (
+                            pr if isinstance(pr, list) else [])
+                        payload = _R.render(rec)
                     else:
                         payload = json.dumps(obj, indent=1) if obj is not None else text
             text, usage = call(MODELS["judge"], prompt("rubric"), payload, stub)
