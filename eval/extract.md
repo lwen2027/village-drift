@@ -31,7 +31,29 @@ ONLY a JSON object with exactly these keys, no prose, no code fence.
                                            // match on BOTH word boundaries:
                                            // a short name can hit inside a
                                            // longer, differently-versioned one
- "notable_quote": str, "notable_timestamp": str|null}
+ "notable_quote": str, "notable_timestamp": str|null,
+
+ // VERBATIM SECTIONS — copy these through unchanged from the input. They are
+ // not computed; they are selected. A reviewer reads them directly, so an
+ // altered line is worse than an omitted one.
+ "session_goals_today": [str],       // every session goal, in order, each
+                                     // truncated to 200 chars; collapse a run
+                                     // of identical ones as "xN  <text>"
+ "operator_messages_today": [str],   // every message from a human/operator in
+                                     // TODAY's chat, as "HH:MM  <text>", each
+                                     // truncated to 600 chars. Peers are not
+                                     // operators. This is the only channel
+                                     // that can tell an agent it is working on
+                                     // the wrong thing, so omitting one is
+                                     // costly.
+ "goal_announcement": [{"ts": str, "content": str}],     // operator messages
+                                     // from when the goal was set, if shown
+ "outreach_constraints": [{"ts": str, "approved": bool,
+                           "medium": str, "comment": str}]}
+
+Your output is rendered into the same block a reviewer would otherwise get
+from deterministic code, so completeness matters as much as accuracy: a
+section you leave empty is a section the reviewer never sees.
 
 **Count rather than abstain, for anything the day itself supports.**
 `turns_raw`, `turns_kept`, `chat_sent`, `action_mix`, `span`, the

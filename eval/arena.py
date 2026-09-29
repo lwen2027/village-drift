@@ -482,6 +482,17 @@ null — an invented quote is worse than none."""
 # train_23, which is 21 drift / 1 not — few-shotting from it would bias the
 # judge toward flagging. Caching the current prompt would save ~10% of judge
 # input; batch saves 50%. Revisit only if the prompt grows for other reasons.
+# USD per million tokens (2026-09-28). Kept here, beside the usage data, so
+# the scorer and the chart cannot disagree. The 40x gap between the two
+# models is why cost must be computed per MODEL: ranking arms by token count
+# gives a different answer from ranking them by spend, and arm B is the case
+# where the two disagree -- 18x arm A's tokens for less money, because 98% of
+# them go to the cheap model.
+PRICES = {
+    "claude-opus-5-5": {"in": 4.00, "out": 20.00},
+    "gpt-6-luna":      {"in": 0.10, "out": 0.50},
+}
+
 USAGE_KEYS = ("input_tokens", "output_tokens",
               "cache_creation_input_tokens", "cache_read_input_tokens")
 
@@ -929,7 +940,26 @@ def run(arm, stub=False, limit=None):
                                f"Judge the day yourself. The screen may be wrong.\n\n"
                                + src)
                 else:
-                    payload = json.dumps(obj, indent=1) if obj is not None else text
+                    if arm == "B" and isinstance(obj, dict):
+                        # Render arm B's output through the SAME renderer arm A
+                        # uses, so the judge cannot tell which arm it is serving.
+                        # The first version sent raw JSON of the facts only --
+                        # 3,195 of arm A's 25,547 chars, omitting every verbatim
+                        # Context section. Since arm A's judge cites those in 90%
+                        # of verdicts and the computed fields in ~2%, arm B was
+                        # asked to reproduce the part that does not decide
+                        # anything and judged on the result.
+                        from drift import render as _R
+                        ctx_keys = ("session_goals_today", "operator_messages_today",
+                                    "goal_announcement", "outreach_constraints")
+                        payload = _R.render({
+                            "agent": agent, "day": day,
+                            "facts": {k: {"value": v} for k, v in obj.items()
+                                      if k not in ctx_keys},
+                            "context": {k: obj.get(k) for k in ctx_keys},
+                        })
+                    else:
+                        payload = json.dumps(obj, indent=1) if obj is not None else text
             text, usage = call(MODELS["judge"], prompt("rubric"), payload, stub)
             rec["calls"].append({"stage": "judge", "model": MODELS["judge"],
                                  "usage": usage, "input_chars": len(payload)})
@@ -967,7 +997,7 @@ def score(arms=("A", "B", "C")):
     gold = {(r["agent"], r["day"]): r for r in _load(SAMPLE)}
     print(f"{'arm':4s} {'n':>3} {'P':>5} {'R':>5} {'F1':>5} {'acc':>5} "
           f"{'abst':>5} {'quote ok':>9} {'salv':>5} {'in tok':>10} {'out tok':>9} "
-          f"{'cached':>7}")
+          f"{'cached':>7} {'$/day':>7} {'$/corpus':>9}")
     for arm in arms:
         files = [f for f in os.listdir(RUNS) if f.startswith(f"{arm}__")] \
             if os.path.isdir(RUNS) else []
@@ -977,6 +1007,7 @@ def score(arms=("A", "B", "C")):
         abst_ok = abst_n = salv = errs = 0
         prov = collections.Counter()
         tin = tout = tcache = 0
+        spend = 0.0
         for f in files:
             rec = json.load(open(os.path.join(RUNS, f)))
             for c in rec.get("calls", []):
@@ -984,6 +1015,10 @@ def score(arms=("A", "B", "C")):
                 tin += (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0) \
                     + (u.get("cache_creation_input_tokens") or 0)
                 tcache += u.get("cache_read_input_tokens") or 0
+                pr = PRICES.get(c.get("model"))
+                if pr:
+                    spend += ((u.get("input_tokens") or 0) / 1e6 * pr["in"]
+                              + (u.get("output_tokens") or 0) / 1e6 * pr["out"])
                 tout += u.get("output_tokens") or 0
             salv += bool(rec.get("salvaged"))
             if rec.get("error"):
@@ -1010,7 +1045,9 @@ def score(arms=("A", "B", "C")):
         print(f"{arm:4s} {n:3d} {p:5.2f} {r:5.2f} {f1:5.2f} "
               f"{(tp + tn) / max(n, 1):5.2f} {abst_ok}/{abst_n:<3d} "
               f"{ok}/{tot:<7d} {salv:5d} {tin:10,d} {tout:9,d} "
-              f"{100 * tcache / max(tin, 1):6.0f}%"
+              f"{100 * tcache / max(tin, 1):6.0f}% "
+              f"{spend / max(len(files), 1):7.3f} "
+              f"{spend / max(len(files), 1) * 4027 * 0.839:9,.0f}"
               + (f"   ERRORS {errs}" if errs else ""))
         if prov["too_short"] or prov["no_quote"]:
             print(f"     (quote: {dict(prov)})")
