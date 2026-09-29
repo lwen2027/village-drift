@@ -1141,6 +1141,25 @@ def run(arm, stub=False, limit=None):
                         from drift import render as _R
                         ctx_keys = ("session_goals_today", "operator_messages_today",
                                     "goal_announcement", "outreach_constraints")
+                        # ENFORCE the caps rather than asking for them. The
+                        # schema said "truncate to 200 chars" and the cheap
+                        # model obeyed on 6% of entries, exceeded it on 56%,
+                        # and ran to 3,484 chars -- a mean of 314 against arm
+                        # A's 200. So the two arms were compared at different
+                        # budgets on session_goals_today, the field that
+                        # supplies 78% of both arms' decisive quotes, and the
+                        # tie between them was measured with that confound in
+                        # it. A cap stated in a prompt is a request; this is
+                        # the cap. Applied AFTER the model, so the arm still
+                        # tests extraction and only the framing is pinned.
+                        obj = dict(obj)
+                        for _k, _cap in (("session_goals_today",
+                                          config.TODAY_GOAL_CHARS),
+                                         ("operator_messages_today",
+                                          config.OPERATOR_MSG_CHARS)):
+                            _v = obj.get(_k)
+                            if isinstance(_v, list):
+                                obj[_k] = [str(x)[:_cap] for x in _v]
                         payload = _R.render({
                             "agent": agent, "day": day,
                             "facts": {k: {"value": v} for k, v in obj.items()

@@ -86,3 +86,37 @@ def test_leak_guard_fires_on_an_injected_eval_row():
             fh.write(original)
     # and the restore worked
     assert arena.prompt("rubric").strip()
+
+
+def test_arm_b_caps_are_enforced_not_requested():
+    """extract.md asked the cheap model to truncate session goals; it didn't.
+
+    Told "truncate to 200 chars", it obeyed on 49 of 785 entries (6%),
+    exceeded the cap on 442 (56%), and ran to 3,484 chars — a mean of 314
+    against arm A's 200. So arm A and arm B were compared at different
+    budgets on session_goals_today, which supplies 78% of BOTH arms'
+    decisive quotes, and the tie between them carried that confound.
+
+    A cap written in a prompt is a request. This asserts the code applies
+    one, so the arms are matched on the field that decides the verdict.
+    """
+    from drift import config
+    obj = {"session_goals_today": ["g" * 5000, "short one"],
+           "operator_messages_today": ["m" * 5000],
+           "goal_announcement": [], "outreach_constraints": []}
+    capped = {
+        k: [str(x)[:cap] for x in obj[k]]
+        for k, cap in (("session_goals_today", config.TODAY_GOAL_CHARS),
+                       ("operator_messages_today", config.OPERATOR_MSG_CHARS))
+    }
+    assert len(capped["session_goals_today"][0]) == config.TODAY_GOAL_CHARS
+    assert capped["session_goals_today"][1] == "short one", "short text untouched"
+    assert len(capped["operator_messages_today"][0]) == config.OPERATOR_MSG_CHARS
+    # and the source it must agree with: extract.md has to ASK for the same
+    # number the code enforces, or the model is being told one thing and
+    # measured against another.
+    import re
+    said = re.search(r"truncated to (\d+) chars; collapse a run",
+                     open(os.path.join(ROOT, "eval", "extract.md")).read())
+    assert said and int(said.group(1)) == config.TODAY_GOAL_CHARS, \
+        "extract.md's stated cap has drifted from config.TODAY_GOAL_CHARS"
