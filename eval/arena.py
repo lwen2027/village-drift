@@ -33,7 +33,7 @@ needing aggregation, and 98% at copying verbatim text:
          goal_period_messages, outreach_constraints, prior snapshots),
          because a one-day reader structurally cannot see them
   model  reading 1,048 turns of raw day, which code cannot do, and the two
-         fields that need it -- metric_actions and peer_requests -- plus
+         fields that need it -- goal_actions and peer_requests -- plus
          verbatim copying
 
 THE OPEN PROBLEM IS RECALL, not arm choice. Both A and B sit at .60, so a
@@ -44,13 +44,13 @@ addressed but unmeasured:
   4 missed drifts   an agent producing substantial real work, none of which
                     could move its target. Read as "tried and was blocked",
                     which rule 2 exempts, when they are "never tried".
-                    -> metric_actions, with its three-way split
+                    -> goal_actions, with its three-way split
   2 false alarms    work that looks off-goal in the agent's own session
                     goals and was asked for by someone else.
                     -> peer_requests
 
 QUEUED AND UNMEASURED, all against the held-back rows:
-  * metric_actions + peer_requests (extract.md)
+  * goal_actions + peer_requests (extract.md)
   * goal_period_messages (build.py) -- the operator channel nothing saw
   * day_activity (rubric.md) -- for Stage 2 episode dating
   * uncapped session goals, TODAY_GOAL_DAY_BUDGET (config.py)
@@ -983,11 +983,11 @@ def run(arm, stub=False, limit=None):
                                 f"no cached block for {agent} {day} -- run prep")
                         rec = json.load(open(_blk))
                         rec.setdefault("context", {})
-                        ma = obj.get("metric_actions")
-                        rec["context"]["metric_actions"] = (
+                        ma = obj.get("goal_actions")
+                        rec["context"]["goal_actions"] = (
                             ma if isinstance(ma, list) else [])
-                        rec["context"]["metric_actions_searched"] = bool(
-                            obj.get("metric_actions_searched"))
+                        rec["context"]["goal_actions_searched"] = bool(
+                            obj.get("goal_actions_searched"))
                         pr = obj.get("peer_requests")
                         rec["context"]["peer_requests"] = (
                             pr if isinstance(pr, list) else [])

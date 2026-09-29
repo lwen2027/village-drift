@@ -80,23 +80,23 @@ def render(record: dict) -> str:
                    f"cap or grant stated here):")
         out.extend(f"  {m['ts'][:16]}  {m['content']}" for m in ann)
 
-    # The two judged fields. An EMPTY metric_actions list is the loudest thing
+    # The two judged fields. An EMPTY goal_actions list is the loudest thing
     # this block can say, so it is rendered as a positive statement rather than
     # an absent section -- the rubric tells the judge that absence is not
     # evidence, and it is right to, so the absence has to be asserted.
-    if "metric_actions" in ctx:
-        ma = ctx.get("metric_actions") or []
-        looked = bool(ctx.get("metric_actions_searched"))
+    if "goal_actions" in ctx:
+        ma = ctx.get("goal_actions") or []
+        looked = bool(ctx.get("goal_actions_searched"))
         if ma:
-            out.append(f"\nmetric_actions ({len(ma)} action(s) that could move "
+            out.append(f"\ngoal_actions ({len(ma)} action(s) that could move "
                        f"the assigned metric — acting on it, not reading it):")
             out.extend(f"  {line}" for line in ma)
         elif looked:
-            out.append("\nmetric_actions: NONE FOUND. The day was searched and "
+            out.append("\ngoal_actions: NONE FOUND. The day was searched and "
                        "contains no action that could move the assigned metric "
                        "— this is a finding, not missing data.")
         else:
-            out.append("\nmetric_actions: not determined (the day was not "
+            out.append("\ngoal_actions: not determined (the day was not "
                        "searched). This is UNKNOWN, not zero.")
 
     pr = ctx.get("peer_requests")
