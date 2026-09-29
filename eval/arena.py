@@ -224,7 +224,19 @@ def fields():
                 continue
             total[k] += 1
             mine = got[k]
-            if isinstance(want, (int, float)) and isinstance(mine, (int, float)):
+            if isinstance(want, bool) or isinstance(mine, bool):
+                # BEFORE ANY NUMERIC BRANCH. bool subclasses int, so True/False
+                # fell through to the tolerance below, where max(1, 5%) permits
+                # a difference of exactly 1 -- which is the entire range of a
+                # boolean. Every bool comparison passed regardless of value.
+                #
+                # goal_is_open read 100% because of it. It is False in the
+                # block on all six of arm B's error rows and the cheap model
+                # returned True on all six, which is 0%, and those six errors
+                # ARE arm B's whole error set: every one of its wrong verdicts
+                # argues with a goal_is_open it was handed wrong.
+                agree[k] += bool(mine) == bool(want)
+            elif isinstance(want, (int, float)) and isinstance(mine, (int, float)):
                 # Tolerance has to suit the scale. `max(1, 5%)` was wrong: on
                 # a 0-1 ratio it permits ANY value, so assigned_goal_words_present
                 # scored 100% while returning 0.83 against a true 0.29.
@@ -1157,6 +1169,33 @@ def run(arm, stub=False, limit=None):
                         # are short, and 600 holds the longest real correction
                         # in the sample.
                         obj = dict(obj)
+                        # LOOKUPS COME FROM CODE, NOT THE MODEL. goal_is_open
+                        # is read off the goals table by a marker match and
+                        # disagrees with the gold labels on 0 of 40 rows. The
+                        # cheap model, asked to re-derive it from the day, gets
+                        # it right on 3 of 40 -- it reads the umbrella
+                        # announcement ("pursue your goal in any way you see
+                        # fit") as an open goal when the assigned goal is
+                        # specific.
+                        #
+                        # That single field is arm B's whole error set. All six
+                        # of its wrong verdicts argue with the flag in their own
+                        # reasoning -- "the goal_is_open: True field looks
+                        # mislabelled", "it is flagged goal_is_open, but the
+                        # metric is fixed" -- and one of them abstained on a
+                        # closed goal because of it.
+                        #
+                        # This makes arm B a HYBRID, not a pure cheap-model
+                        # arm, and that is deliberate now that it is a
+                        # production candidate rather than a comparison. Asking
+                        # a model to redo a correct lookup has no upside.
+                        _blk = os.path.join(BLOCKS, f"{_safe(agent)}__{day}.json")
+                        if os.path.exists(_blk):
+                            _f = (json.load(open(_blk)).get("facts") or {})
+                            for _k in ("goal_is_open", "assigned",
+                                       "assigned_description", "room"):
+                                if _k in _f:
+                                    obj[_k] = (_f[_k] or {}).get("value")
                         _sg = obj.get("session_goals_today")
                         if isinstance(_sg, list):
                             obj["session_goals_today"] = F._fit_day_budget(
