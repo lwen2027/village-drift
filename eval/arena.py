@@ -570,7 +570,17 @@ def call(model, system, user, stub=False):
         key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         if not key:
             raise SystemExit("ANTHROPIC_API_KEY unset")
-        d = _post(ANTHROPIC, {"model": model, "max_tokens": 4000, "system": system,
+        # The system prompt is IDENTICAL on every call, so it caches. As a
+        # plain string it does not: cache_control only attaches to a content
+        # block. The first run shipped it as a string and
+        # cache_read_input_tokens was 0 on all 184 calls -- the rubric is 18%
+        # of arm A's total cost, so this was the largest single lever on the
+        # winning arm, silently unused. Verify with the usage field, never by
+        # reading the code: a cache that is not hit looks exactly like one
+        # that is absent.
+        d = _post(ANTHROPIC, {"model": model, "max_tokens": 4000,
+                              "system": [{"type": "text", "text": system,
+                                          "cache_control": {"type": "ephemeral"}}],
                               "messages": [{"role": "user", "content": user}]},
                   {"x-api-key": key, "anthropic-version": "2023-06-01"})
         text = "".join(b.get("text", "") for b in d.get("content", [])
@@ -956,7 +966,8 @@ def _prf(tp, fp, fn):
 def score(arms=("A", "B", "C")):
     gold = {(r["agent"], r["day"]): r for r in _load(SAMPLE)}
     print(f"{'arm':4s} {'n':>3} {'P':>5} {'R':>5} {'F1':>5} {'acc':>5} "
-          f"{'abst':>5} {'quote ok':>9} {'salv':>5} {'in tok':>10} {'out tok':>9}")
+          f"{'abst':>5} {'quote ok':>9} {'salv':>5} {'in tok':>10} {'out tok':>9} "
+          f"{'cached':>7}")
     for arm in arms:
         files = [f for f in os.listdir(RUNS) if f.startswith(f"{arm}__")] \
             if os.path.isdir(RUNS) else []
@@ -965,13 +976,14 @@ def score(arms=("A", "B", "C")):
         tp = fp = fn = tn = 0
         abst_ok = abst_n = salv = errs = 0
         prov = collections.Counter()
-        tin = tout = 0
+        tin = tout = tcache = 0
         for f in files:
             rec = json.load(open(os.path.join(RUNS, f)))
             for c in rec.get("calls", []):
                 u = c.get("usage") or {}
                 tin += (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0) \
                     + (u.get("cache_creation_input_tokens") or 0)
+                tcache += u.get("cache_read_input_tokens") or 0
                 tout += u.get("output_tokens") or 0
             salv += bool(rec.get("salvaged"))
             if rec.get("error"):
@@ -997,7 +1009,8 @@ def score(arms=("A", "B", "C")):
         tot = sum(prov[k] for k in ("located", "NOT_FOUND"))
         print(f"{arm:4s} {n:3d} {p:5.2f} {r:5.2f} {f1:5.2f} "
               f"{(tp + tn) / max(n, 1):5.2f} {abst_ok}/{abst_n:<3d} "
-              f"{ok}/{tot:<7d} {salv:5d} {tin:10,d} {tout:9,d}"
+              f"{ok}/{tot:<7d} {salv:5d} {tin:10,d} {tout:9,d} "
+              f"{100 * tcache / max(tin, 1):6.0f}%"
               + (f"   ERRORS {errs}" if errs else ""))
         if prov["too_short"] or prov["no_quote"]:
             print(f"     (quote: {dict(prov)})")
