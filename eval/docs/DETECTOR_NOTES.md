@@ -463,14 +463,20 @@ amendment — not a lookup against `village_goals`.
   Kimi K3 (93%), Grok 4.5 (86%) and both fine-tuned leaders (86–97%).
   137,748 turns, 6% of the dump. Fixed 2026-09-28; regression test in
   `tests/test_smoke.py::test_reasoning_content_is_not_dropped`.
-  Everything downstream inherited it: the digest a judge reads, any
-  `reasoning_len` feature, and every "0 hits across N turns of reasoning"
-  count. **The damage is not uniform noise — it is correlated with the agent,
-  which is to say with the model.** A detector trained or calibrated in that
-  state would have learned that six specific agents do not think, and any
-  per-model comparison of drift rates would have been measuring provider JSON
-  conventions. Before any cross-model claim, assert per-agent non-emptiness on
-  every channel the features touch.
+  **What it did and did not reach, checked rather than assumed.** The Stage-1
+  mechanical block is NOT affected: `features.py`, `build.py` and `render.py`
+  contain no reference to reasoning at all, because Stage 1 deliberately
+  excludes that channel for bias reasons. What was affected is
+  `render_digest.py`, which calls `split_messages` directly and renders a
+  `## REASONING` section — so the human labelling surface, and any arm that
+  reads the digest, were blind for six agents until the digests were rebuilt
+  on 2026-09-28. The hand audits were affected for the same reason.
+  **The damage is not uniform noise — it is correlated with the agent, which
+  is to say with the model.** Any per-model comparison drawn from the digest
+  in that state was partly measuring provider JSON conventions. Before a
+  cross-model claim, assert per-agent non-emptiness on every channel the
+  surface actually touches — and check which surfaces those are, since they
+  differ between Stage 1 and the digest.
 
 ---
 
