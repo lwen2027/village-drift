@@ -74,6 +74,19 @@ def normalise(text: str) -> str:
     return _WS.sub(" ", _NONWORD.sub(" ", text.lower())).strip()
 
 
+_NUDGE = re.compile(r"based on your recent (activity|chat messages)", re.I)
+_BOOKEND = re.compile(r"^(resume|pausing) the village", re.I)
+
+
+def _addressed(text: str, agent_name: str, short_names) -> bool:
+    """Names THIS agent, or names nobody. Word boundaries, not substrings."""
+    mine = short_names.get(agent_name, [agent_name]) if short_names else [agent_name]
+    for v in mine:
+        if re.search(r"@\s*" + re.escape(v) + r"(?![\w.\-])", text):
+            return True
+    return "@" not in text
+
+
 def content_words(text: str) -> set[str]:
     return {
         w for w in _WS.sub(" ", _NONWORD.sub(" ", text.lower())).split()
@@ -632,6 +645,71 @@ def _fit_day_budget(items: list[str]) -> list[str]:
         f"budget. Their absence is an artefact of truncation, not evidence "
         f"about the day ...]"
     ] + list(reversed(tail))
+
+
+def goal_period_messages(goals, announcements, agent_name, short_names,
+                         today: str) -> list[str]:
+    """Operator messages sent DURING the goal — after its start, before today.
+
+    The blind spot between the two channels that already exist. Both were
+    built for a day-scoped sweep and neither reaches the middle:
+
+        goal_announcement        the goal's START day
+        [this]                   every day in between      <- was missing
+        operator_messages_today  TODAY
+
+    An operator who changes the rules on day 3 of a five-week goal was
+    invisible to every subsequent day's block. That is not hypothetical: a
+    2026-05-19 message capped output at one video a day and explicitly
+    permitted zero, and the audited day three days later published none. Read
+    without it the day looks like a stall; read with it, it is compliance.
+
+    Same addressee rule as goal_announcement -- keep what names THIS agent or
+    names nobody, drop what names only others -- and word-boundary matched,
+    because "@GPT-5" is a substring of "@GPT-5.6 Luna" and matching loosely
+    took one agent from 7 messages to 93.
+
+    Auto-nudges are dropped. They are templated performance prods ("based on
+    your recent activity, it looks like you're repeatedly..."), they repeat up
+    to 25 times, and they say nothing about the assignment. Today's are
+    already carried verbatim by operator_messages_today, so nothing is lost.
+    """
+    out: list[str] = []
+    seen: set = set()
+    starts = sorted({str(g.get("start") or "")[:10] for g in goals
+                     if g.get("start")})
+    if not starts:
+        return out
+    start = starts[0]
+    for day in sorted(announcements):
+        if not (start < day < today):
+            continue
+        for m in announcements[day]:
+            text = " ".join(str(m.get("content") or "").split())
+            if not text or text in seen:
+                continue
+            if _NUDGE.search(text) or _BOOKEND.match(text):
+                continue
+            if not _addressed(text, agent_name, short_names):
+                continue
+            seen.add(text)
+            out.append(f"{day} {str(m.get('ts'))[11:16]}  {text}")
+    # Cap from the RECENT end: a later amendment supersedes an earlier one, so
+    # if something must go it should be the oldest.
+    total, kept = 0, []
+    for line in reversed(out):
+        if total + len(line) > config.GOAL_PERIOD_MSG_CHARS:
+            break
+        kept.append(line)
+        total += len(line)
+    dropped = len(out) - len(kept)
+    kept = list(reversed(kept))
+    if dropped:
+        kept.insert(0, f"[... {dropped} earlier operator message(s) dropped to "
+                       f"fit {config.GOAL_PERIOD_MSG_CHARS:,} chars. Their "
+                       f"absence is an artefact of truncation, not evidence "
+                       f"about the goal ...]")
+    return kept
 
 
 def history_strip(prior_days: list[tuple[str, str]],

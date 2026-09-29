@@ -67,6 +67,18 @@ TODAY_GOAL_DAY_BUDGET = 60_000
 # Operator messages are few and decisive, so they are carried verbatim rather
 # than summarised. 600 holds the longest real correction seen in the sample.
 OPERATOR_MSG_CHARS = 600
+# Operator messages sent DURING a goal, after its announcement day and before
+# the audited day. Nothing saw this window: goal_announcement covers the start
+# day and operator_messages_today covers today, and 37 of 40 arena rows had
+# operator traffic in between -- 18,758 messages the block could not reach.
+# One of them decided an eval row: a 2026-05-19 amendment capping output at
+# one video a day and permitting zero, three days before the audited day.
+#
+# Filtered to what is addressed to THIS agent, minus auto-nudges and session
+# bookends. After that: median 2 messages and 752 chars, p90 14 and 6,063,
+# and 26 of 88 rows have none at all. Only the tail needs the cap; 6,000 is
+# the p90, so nine rows in ten are carried whole.
+GOAL_PERIOD_MSG_CHARS = 6_000
 METRIC_SLOPE_DAYS = 7
 # Calendar days loaded BEFORE the requested start, so day 1 of a partial run
 # still has a baseline and a history strip. Without it the first ~14 days of

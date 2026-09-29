@@ -12,6 +12,7 @@ So records are written day-major even though they are computed agent-major.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import statistics
@@ -123,9 +124,26 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
     # Both are standing instructions; both are invisible to a sweep of the
     # audited day. See load.load_goal_announcements / load_outreach_constraints.
     log("loading goal announcements + outreach constraints…")
-    announce_days = {str(g["start_time"])[:10]
-                     for g in list(agent_goals) + list(village_goals)
-                     if g.get("start_time")}
+    # The goal's START day, plus every day it governed up to the end of the
+    # run. An operator who amends the rules on day 3 of a five-week goal was
+    # invisible to every block after it: goal_announcement covers the start
+    # day and operator_messages_today covers today, and nothing covered the
+    # middle. 37 of 40 arena rows had operator traffic in that hole.
+    #
+    # Loading the span costs nothing extra -- load_goal_announcements already
+    # reads chat_messages by day token, and these are the same tokens the
+    # digest window touches.
+    announce_days = set()
+    for g in list(agent_goals) + list(village_goals):
+        st = str(g.get("start_time") or "")[:10]
+        if not st:
+            continue
+        stop = min(str(g.get("end_time") or end or st)[:10], str(end or st)[:10])
+        d = datetime.date.fromisoformat(st)
+        last = datetime.date.fromisoformat(max(stop, st))
+        while d <= last:
+            announce_days.add(str(d))
+            d += datetime.timedelta(days=1)
     announcements = load.load_goal_announcements(announce_days)
     outreach = load.load_outreach_constraints()
 
@@ -238,6 +256,18 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             # does not get carried forward for weeks as if it were an addendum.
             block.context["goal_announcement"] = (
                 F.goal_announcement(goals, announcements, name, short_names)
+                if goals else []
+            )
+            # Operator messages sent DURING the goal — after the start day,
+            # before today. The third standing channel, and the one nothing
+            # reached: a 2026-05-19 message capping output at one video a day
+            # and permitting zero decided an eval row three days later, and no
+            # block could see it. Mechanical by necessity, not by preference —
+            # it lives outside any single day, so no day-scoped pass, Luna's
+            # included, can extract it.
+            block.context["goal_period_messages"] = (
+                F.goal_period_messages(goals, announcements, name,
+                                       short_names, day)
                 if goals else []
             )
             # Standing outreach-approval instructions issued BEFORE this day.

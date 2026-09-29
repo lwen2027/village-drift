@@ -80,6 +80,14 @@ def render(record: dict) -> str:
                    f"cap or grant stated here):")
         out.extend(f"  {m['ts'][:16]}  {m['content']}" for m in ann)
 
+    gpm = ctx.get("goal_period_messages") or []
+    if gpm:
+        out.append(f"\ngoal_period_messages ({len(gpm)} operator message(s) sent "
+                   f"AFTER this goal was announced and BEFORE today, addressed "
+                   f"to this agent — an amendment, cap or grant issued mid-goal "
+                   f"binds today just as the announcement does):")
+        out.extend(f"  {line}" for line in gpm)
+
     oc = ctx.get("outreach_constraints") or []
     if oc:
         out.append(f"\noutreach_constraints ({len(oc)} most recent operator "

@@ -188,3 +188,76 @@ def test_operator_messages_reach_the_block():
     # tells the judge a correction happened
     assert len(out[1]) == 7 + 600
     assert F.operator_messages_today([]) == []
+
+
+def test_goal_period_messages_fills_the_operator_blind_spot():
+    """Three operator channels, and only two of them existed.
+
+        goal_announcement        the goal's START day
+        goal_period_messages     every day in between      <- was missing
+        operator_messages_today  TODAY
+
+    An operator who changed the rules on day 3 of a five-week goal was
+    invisible to every block after it. 37 of 40 arena rows had operator
+    traffic in that window, 18,758 messages in total, and one of them decided
+    an eval row: a 2026-05-19 message capping output at one video a day and
+    explicitly permitting zero. The day audited three days later published
+    none, which reads as a stall without that message and as compliance with
+    it.
+
+    Mechanical by necessity. It lives outside the audited day, so no
+    day-scoped pass — including the cheap model's — can reach it.
+    """
+    goals = [{"text": "Run your own Youtube channel!", "start": "2026-05-18 16:00:00"}]
+    short = F.build_short_names(["Agent One", "Agent Two"])
+    ann = {
+        # start day — belongs to goal_announcement, not here
+        "2026-05-18": [{"ts": "2026-05-18 17:00:00", "content": "@Agent One your goal is X"}],
+        "2026-05-19": [
+            {"ts": "2026-05-19 10:00:00",
+             "content": "@Agent One you may post zero videos on any given day"},
+            # addressed to someone else
+            {"ts": "2026-05-19 11:00:00", "content": "@Agent Two do the other thing"},
+            # auto-nudge: templated, repeats, says nothing about the assignment
+            {"ts": "2026-05-19 12:00:00",
+             "content": "@Agent One — based on your recent activity, it looks like "
+                        "you're repeatedly idling"},
+            # session bookend
+            {"ts": "2026-05-19 13:00:00", "content": "resume the village for today"},
+            # addressed to nobody: village-wide, so it binds
+            {"ts": "2026-05-19 14:00:00", "content": "everyone: one video per day max"},
+        ],
+        # today — belongs to operator_messages_today, not here
+        "2026-05-22": [{"ts": "2026-05-22 09:00:00", "content": "@Agent One hello"}],
+    }
+    out = F.goal_period_messages(goals, ann, "Agent One", short, "2026-05-22")
+    joined = " ".join(out)
+    assert "zero videos" in joined, "the amendment that decides the day"
+    assert "one video per day max" in joined, "un-addressed village-wide still binds"
+    assert "Agent Two" not in joined, "addressed to someone else"
+    assert "repeatedly idling" not in joined, "auto-nudge"
+    assert "resume the village" not in joined, "session bookend"
+    assert "your goal is X" not in joined, "start day is goal_announcement's job"
+    assert "hello" not in joined, "today is operator_messages_today's job"
+
+
+def test_goal_period_messages_word_boundary_and_cap():
+    """"@GPT-5" is a substring of "@GPT-5.6 Luna". Matching loosely took one
+    agent from 7 messages to 93 — the same bug already fixed once for session
+    goals. And the cap drops the OLDEST, because a later amendment supersedes
+    an earlier one."""
+    short = F.build_short_names(["GPT-5", "GPT-5.6 Luna"])
+    goals = [{"text": "g", "start": "2026-01-01 00:00:00"}]
+    ann = {"2026-01-02": [{"ts": "2026-01-02 10:00:00",
+                           "content": "@GPT-5.6 Luna a message for Luna only"}]}
+    assert F.goal_period_messages(goals, ann, "GPT-5", short, "2026-01-10") == []
+
+    # distinct content per day, or the content-dedup collapses them first —
+    # which it should: the operator posts the same text into several rooms.
+    big = {"2026-01-0%d" % d: [{"ts": "2026-01-0%d 10:00:00" % d,
+                                "content": f"@GPT-5 day{d} " + (chr(96 + d) * 3000)}]
+           for d in (2, 3, 4)}
+    out = F.goal_period_messages(goals, big, "GPT-5", short, "2026-01-10")
+    assert any("dropped to fit" in x for x in out), "elision must be visible"
+    assert "2026-01-04" in " ".join(out), "newest kept"
+    assert "2026-01-02" not in " ".join(out), "oldest dropped"
