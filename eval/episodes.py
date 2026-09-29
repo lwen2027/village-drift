@@ -81,12 +81,35 @@ So AUC 0.961 at telling adjacent days from unrelated ones does NOT yield a
 stopping rule. Discrimination between pairs and termination of a chain are
 different problems, and only the first was measured.
 
-WHAT WOULD FIX IT is the thing this was built to avoid: a focused per-day
-activity descriptor emitted by Stage 1. Raw session goals mix the day's work
-with the agent's standing vocabulary, and it is the standing vocabulary that
-defeats termination. A descriptor naming only what the day was spent on
-would not carry it. That is a Stage-1 output change, so it belongs with the
-other queued rubric changes rather than here.
+The clearest single view of the failure. Every day below carries the
+marathon vocabulary explicitly, so it is one unbroken activity:
+
+    day          words   activity terms                       jaccard vs 07-06
+    2026-07-01     569   games keystroke points victory ...          0.089
+    2026-07-02     485   games keystroke points victory ...          0.069
+    2026-07-03     124   games keystroke marathon victory ...        0.091
+    2026-07-07     179   — (none)                                    0.219
+
+The three real continuations fall below a 0.10 line. The ONSET day, which
+contains none of the marathon terms because that is the day the work got
+relabelled, scores highest of all. The metric ranks the relabelled day as
+more similar than the days doing the identical thing, which is the exact
+inversion of what the walk needs.
+
+THE FIX IS NOW IN THE RUBRIC. `day_activity` was added to the Stage-1 output
+contract on 2026-09-29: 3-8 words naming what the agent actually spent the
+day doing, in its own vocabulary. Three or four words against three or four
+words is comparable where 485 against 272 is not. `descriptor()` below
+prefers it and falls back to session goals, so this module works either way
+-- but the fallback is the thing measured NOT to work, and a walk run on it
+should be read as a lower bound, not an answer.
+
+NOTHING HAS BEEN RE-MEASURED WITH day_activity. It is an output-contract
+change and belongs in the single validation pass with the confidence
+threshold and the uncapped session goals. Re-calibrate the threshold on
+descriptors before trusting any activity_start this produces: the 0.10 here
+was fitted to whole-day bags of 100-600 words and means nothing against
+descriptors of four.
 
     python3 eval/episodes.py calibrate     # does descriptor matching work?
     python3 eval/episodes.py build         # -> tables/stage2/episodes.jsonl
@@ -167,6 +190,21 @@ def goal_text(row) -> str:
     return ""
 
 
+def day_activity(agent: str, day: str) -> str | None:
+    """The Stage-1 judge's own one-line answer to "what was this day spent on".
+
+    Returns None until a Stage-1 run made AFTER 2026-09-29 exists — the field
+    postdates every run currently on disk.
+    """
+    import glob as _g
+    for f in _g.glob(os.path.join(TABLES, "stage1", "arena_runs",
+                                  f"*__{_safe(agent)}__{day}.json")):
+        v = (json.load(open(f)) or {}).get("verdict") or {}
+        if v.get("day_activity"):
+            return str(v["day_activity"])
+    return None
+
+
 def descriptor(agent: str, day: str) -> set:
     """What the agent was ACTUALLY doing that day, as a content-word set.
 
@@ -180,6 +218,9 @@ def descriptor(agent: str, day: str) -> set:
     what the agent wrote for itself, and when they do echo the goal that is
     signal about what it was working on rather than boilerplate.
     """
+    da = day_activity(agent, day)
+    if da:
+        return content_words(da)
     path = os.path.join(RAW, day, f"{_safe(agent)}.json")
     if not os.path.exists(path):
         return set()
