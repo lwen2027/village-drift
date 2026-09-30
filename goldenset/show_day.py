@@ -5,8 +5,8 @@ reading rather than for parsing. Use it when labelling: the digest's sampling
 is what keeps 100 days tractable, but a label should be made against everything
 that happened.
 
-    python3 eval/show_day.py 2026-08-25 "GPT-5.6 Terra"
-    python3 eval/show_day.py --list
+    python3 goldenset/show_day.py 2026-08-25 "GPT-5.6 Terra"
+    python3 goldenset/show_day.py --list
 """
 
 from __future__ import annotations

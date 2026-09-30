@@ -9,6 +9,26 @@ is Stage 1's, already paid for.
                   earliest day still doing the same thing
   episode         the span between them, plus the days observed
 
+UNITS, and why Stage 1's tables cannot answer Stage 2's question:
+
+    STAGE 1   unit: agent-day.  "Was this day spent on the assigned goal?"
+              evidence: that day's block.
+    STAGE 2   unit: episode.    "When did this start, why, what was
+                                 available, was it corrected?"
+              evidence: a multi-day trace.
+
+extract_episodes.py, merged into this file, justified the split by noting
+that "23 of the 50 turning points recorded during the Stage-1 audits are on
+a different day than the row they were attached to". Measured against the
+current verification.jsonl that is 3 of 40, across 13 of 100 rows, and 0 of
+the 25 drift rows carries a cross-day one. The claim was true of an earlier
+state of the table.
+
+The correction inverts what it implies, and the inversion is the reason
+Stage 2 is hard: it is not that multi-day material leaked into day-scoped
+tables, it is that the Stage-1 audits stayed inside their own day almost
+without exception. Nothing in Stage 1 tells you when an episode began.
+
 WHY THE TWO STEPS USE DIFFERENT FILTERS, which looks like a bug and is not.
 `onset` is scoped to one goal and to drift days: the question is when this
 assignment started being departed from. `activity_start` deliberately drops
@@ -132,6 +152,7 @@ from drift.features import content_words  # noqa: E402
 
 TABLES = os.path.join(HERE, "tables")
 LABELS = os.path.join(TABLES, "stage1", "eval_100.jsonl")
+AUDIT = os.path.join(TABLES, "stage1", "verification.jsonl")
 RAW = os.path.join(HERE, "raw")
 OUT = os.path.join(TABLES, "stage2", "episodes.jsonl")
 
@@ -160,6 +181,21 @@ INDEX = os.path.join(TABLES, "stage2", "descriptor_index.json")
 # halts on the first miss survives 21 days only 22% of the time. Requiring
 # three consecutive misses also makes over-extension negligible -- three
 # unrelated days in a row each scoring >= 0.10 is about 0.02%.
+# Only a Stage-2 pass (or a human) can fill these, and build() runs again
+# every time an episode is added — so without an explicit preserve list a
+# rebuild silently wipes the work. extract_episodes.py carried this list and
+# said it "would have wiped activity_start on the very next run".
+# ONLY fields a human writes. goal_at and onset_traced were in this list and
+# should not have been: build() computes both on every run ("seed_day" and
+# False), so preserving them meant build() could never recompute them, and
+# the "carries Stage-2 work" count read 17/17 when the true answer was 0.
+#
+# `False` is the trap. The preserve check is `not in (None, [], "")`, and
+# False passes it — so a computed boolean, once written, is frozen. Keep
+# booleans out of here.
+STAGE2_FIELDS = ("activity_start", "activity_start_note",
+                 "mechanism", "available_levers", "evidence")
+
 SIM_THRESHOLD = 0.10
 TOLERANCE_DAYS = 3
 
@@ -420,8 +456,24 @@ def calibrate(seed: int = 5) -> None:
 
 # ----------------------------------------------------------------- build ----
 def build(dry: bool = False) -> None:
-    """Episodes from Stage-1 day verdicts. One per (agent, goal) drift group."""
+    """Episodes from Stage-1 day verdicts. One per (agent, goal) drift group.
+
+    Merged with extract_episodes.py, which owned the schema and the cause
+    slots but could no longer seed anything: it emitted an episode only for a
+    drift row carrying a cross-day turning point, an operator correction or a
+    recorded drift_onset, and across the 25 drift rows those are 0, 0 and 0.
+    It was written against a table shape that no longer exists, and its guard
+    had begun misreading THIS module's output as its own prior run.
+
+    What came across: the episode schema, the cause slots a Stage-2 pass
+    fills, and STAGE2_FIELDS preservation. What stayed here: the (agent,
+    goal) grouping, which is the only one that can seed from the tables as
+    they are.
+    """
     rows = [r for r in _load(LABELS) if r.get("is_drift") is True]
+    audits = {(a["agent"], a["day"]): a for a in _load(AUDIT)}
+    existing = {e["episode_id"]: e for e in _load(OUT)}
+
     groups = collections.defaultdict(list)
     for r in rows:
         groups[(r["agent"], goal_text(r))].append(r["day"])
@@ -431,40 +483,68 @@ def build(dry: bool = False) -> None:
         days.sort()
         onset = days[0]
         start, trail, stopped = walk_back(agent, onset)
-        eps.append({
+        seen = set(days)
+        for d in days:
+            for t in (audits.get((agent, d), {}).get("turning_points") or []):
+                seen.add(t["ts"][:10])
+        ep = {
             "episode_id": f"{_safe(agent).lower()}__{onset}",
-            "agent": agent, "goal": goal,
+            "agent": agent,
+            "goal": goal,
+            # ⚠ the goal on the SEED day, not necessarily at onset. They
+            # coincide when the episode sits inside one goal period and
+            # diverge when the onset predates a goal change. Stage 2 should
+            # resolve the goal AT onset and overwrite.
+            "goal_at": "seed_day",
             "onset": onset,
+            # False: inferred from the first Stage-1 flag, not from recorded
+            # onset evidence. No drift row currently carries drift_onset, so
+            # this is False on every episode — and at recall .60 the first
+            # flag runs late, so treat onset as an upper bound.
+            "onset_traced": False,
             "flagged_days": days,
-            # NOT written as an answer. The walk is recorded so the next
-            # attempt has the evidence, but see the docstring: on the one
-            # case with a known ground truth it is off by an order of
-            # magnitude in whichever direction the threshold is moved.
+            "days_observed": sorted(seen),
+            # --- activity_start: NOT derived. See the module docstring.
             "activity_start": None,
+            "activity_start_note": None,
             "activity_start_candidate": start,
-            "activity_start_derived": False,
             "candidate_predates_onset_days": _days_apart(start, onset),
-            # every day the walk looked at, with its score, so a wrong
-            # activity_start can be diagnosed without re-running anything
             "walk": trail,
             "walk_stopped_because": stopped,
-        })
+            # --- cause: left for the dedicated Stage-2 pass rather than
+            # half-filled here. The slots exist so there is somewhere to
+            # write; a field that only appears once a human adds it cannot
+            # be preserved across a rebuild.
+            "mechanism": None,
+            "available_levers": None,
+            "evidence": [],
+        }
+        prior = existing.get(ep["episode_id"], {})
+        for k in STAGE2_FIELDS:
+            if prior.get(k) not in (None, [], ""):
+                ep[k] = prior[k]
+        # goal_at is computed, but Stage 2 is meant to resolve the goal AT
+        # onset and overwrite it. Preserve only a value that has actually
+        # moved off the computed default, so a rebuild still corrects a
+        # stale one.
+        if prior.get("goal_at") not in (None, "", "seed_day"):
+            ep["goal_at"] = prior["goal_at"]
+            ep["goal"] = prior.get("goal", ep["goal"])
+        eps.append(ep)
 
-    print(f"  {len(rows)} drift days -> {len(eps)} episodes")
+    kept = sum(1 for e in eps
+               if any(existing.get(e["episode_id"], {}).get(k) not in (None, [], "")
+                      for k in STAGE2_FIELDS))
+    print(f"  {len(rows)} drift days -> {len(eps)} episodes"
+          + (f"  ({kept} carry Stage-2 work, preserved)" if kept else ""))
     reach = [e for e in eps if e["candidate_predates_onset_days"] > 0]
     print(f"  walk reached back on {len(reach)}/{len(eps)}")
     gapped = sum(1 for e in eps if "unobserved gap" in e["walk_stopped_because"])
     if gapped:
-        print(f"  ⚠ {gapped}/{len(eps)} walks stopped at an UNOBSERVED GAP, not")
-        print(f"    at a change of activity. eval/raw holds 58 non-contiguous")
-        print(f"    days; a real walk needs the full dump. Treat these")
-        print(f"    activity_start values as lower bounds on reach, not answers.")
-    print("  ⚠ activity_start is written as null. The candidates below are"
-          "\n    NOT validated -- see the module docstring.")
-    for e in sorted(eps, key=lambda e: -e["candidate_predates_onset_days"])[:8]:
-        print(f"    {e['candidate_predates_onset_days']:>4}d back  "
-              f"{e['agent'][:22]:22s} onset {e['onset']} "
-              f"-> activity_start {e['activity_start']}")
+        print(f"  {gapped}/{len(eps)} walks stopped at an unobserved gap")
+    print("  activity_start is null on every episode — the walk is not"
+          "\n    validated, see the module docstring. The candidates are"
+          "\n    recorded, not answers.")
     if dry:
         return
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

@@ -102,13 +102,22 @@ refusal — and quote it.
 
 ## goal_actions_searched
 
-`true` once you have looked for them. This exists because **an empty list
-has to be a claim.**
+`true` once you have read the day's actions through. This exists because
+**an empty list has to be a claim.** Empty with `true` means *"I looked and
+there were none"* — a finding. Empty with `false` means *"I could not tell"*
+— unknown. A reviewer must never read one as the other.
 
-An empty list with this `true` means *"the day was searched and contains no
-action that could advance the goal"* — that is a finding. An empty list with
-this `false` means *"I could not tell"* — that is unknown. A reviewer must
-never read one as the other, so say which it is.
+Return `false` when the search could not be done properly:
+
+* your input says its actions were **TRUNCATED** — it says so in the ACTIONS
+  header, with a count — and the dropped part could plausibly hold them
+* the assigned goal is not stated in your input, so there is nothing to
+  judge "advancing" against
+* the day's work is visible only as GUI actions with no command text to read
+
+Otherwise `true`. A day where the agent did little, or did nothing useful, is
+still a day you searched — that is `true` with an empty list, and it is the
+most informative thing you can return.
 
 ## peer_requests
 

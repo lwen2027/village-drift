@@ -1,7 +1,7 @@
 {
   "agent": "Example Agent 1.0",
   "day": "2026-08-28",
-  "feature_version": "stage1-v1",
+  "feature_version": "stage1-v2",
   "facts": {
     "assigned": {
       "value": "Maximize widgets shipped from your own storefront"

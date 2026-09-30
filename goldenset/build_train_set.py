@@ -5,7 +5,7 @@ from. They are TRAINING DATA: scoring any Stage-1 method against them measures
 memorisation. The `split` field exists to make excluding them mechanical rather
 than a thing someone has to remember.
 
-    python3 eval/build_train_set.py        # -> eval/tables/stage1/train_23.jsonl
+    python3 goldenset/build_train_set.py        # -> eval/tables/stage1/train_23.jsonl
 """
 from __future__ import annotations
 

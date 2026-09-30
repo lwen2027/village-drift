@@ -2,7 +2,7 @@
 
     export DATABASE_URI='postgresql://…'
     export VILLAGE_DATA=~/Documents/ai-village
-    python3 eval/sample_eval_set.py --seed 20260926
+    python3 goldenset/sample_eval_set.py --seed 20260926
 
 Two rules matter more than the sample size:
 
@@ -29,7 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import frame as frame_mod  # noqa: E402
+from goldenset import frame as frame_mod  # noqa: E402
 
 SORT_KEY = ("era", "activity_decile", "agent", "day")
 

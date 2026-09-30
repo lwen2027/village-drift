@@ -12,7 +12,7 @@ what the raw logs actually say. One entry per claim in the current reasoning —
 no verdicts and no revision history. When a pass changes its mind, it OVERWRITES
 the claim; the old version is simply gone.
 
-    from eval.verify import record
+    from goldenset.verify import record
     record(agent, day, claims=[...], turning_points=[...])
 
 Written only during the manual step-through; nothing generates it automatically.
@@ -69,13 +69,15 @@ import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# tables, digests and raw dumps stayed in eval/ when this moved here.
+EVAL = os.path.join(os.path.dirname(HERE), "eval")
 # Tables are split by STAGE, because that is the distinction the whole eval
 # rests on and it was previously invisible on disk:
 #   tables/stage1/  agent-day unit, target is_drift  — eval_100, verification, train_23
 #   tables/stage2/  episode unit,  target onset/mechanism — episodes
 # eval/tables/ is gitignored in full, so these constants are the only committed
 # record of the layout. Keep them in step with eval/docs/README.md.
-TABLES = os.path.join(HERE, "tables")
+TABLES = os.path.join(EVAL, "tables")
 STAGE1 = os.path.join(TABLES, "stage1")
 LABELS = os.path.join(STAGE1, "eval_100.jsonl")
 AUDIT = os.path.join(STAGE1, "verification.jsonl")

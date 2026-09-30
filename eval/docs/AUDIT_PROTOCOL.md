@@ -251,13 +251,18 @@ with reasoning/commands/output. Can be tens of thousands of lines — page it wi
 Anything else, Python from the repo root:
 
 ```python
-import sys; sys.path.insert(0, 'eval'); sys.path.insert(0, '.')
-from context import _dump, operator_messages, room_for
-from drift import load, rooms as R
-D = _dump()   # agents, rooms, chat, active, span, agent_goals, village_goals, observed
+import sys; sys.path.insert(0, '.')
+from drift import build as B, load, rooms as R
+# One agent-day, facts and verbatim context, the same record the judge reads:
+rec = B.build("2026-08-17", "2026-08-17")
 load._rows("computer_use_turns.jsonl.gz")
 reasoning, speech = load.split_messages(t["agent_messages"])
 ```
+
+eval/context.py used to be the way in here — `_dump()`, `operator_messages()`,
+`room_for()`. It was deleted 2026-09-29: every one of its six functions had
+zero callers, because `drift/build.py` now resolves goals, rooms and operator
+messages properly and puts them in the block.
 
 Tables: `agents`, `chat_rooms`, `chat_messages`, `computer_use_sessions`,
 `computer_use_turns`, `agent_memories`, `agent_goals`, `village_goals`,
@@ -281,8 +286,11 @@ Tables: `agents`, `chat_rooms`, `chat_messages`, `computer_use_sessions`,
   60s after it began.
 - A turn's agent comes via `computer_use_sessions.agent_id`.
 - An operator message has `agent_speaker_id` null.
-- `context.goals_for()` is **wrong on mid-day goal switches** (resolves
-  midnight-to-midnight, returns both goals). Use the stored `goals` column.
+- Mid-day goal switches: resolving a goal midnight-to-midnight returns BOTH
+  goals for the day, which reads the pre-switch work as off-goal when it was
+  compliant. `eval/context.py` had this bug and is gone; `drift/build.py`
+  carries both goals deliberately and labels them, and `features.goal_features`
+  notes "GOAL CHANGED DURING THIS DAY" when it happens.
 
 **Room-scoped goals.** Between **2026-03-16 and 2026-07-06** `#best` and `#rest`
 had *different* goals and were access-isolated, and `village_goals` records only

@@ -29,7 +29,9 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "eval"))
 
-import arena  # noqa: E402
+PROMPT_DIR = os.path.join(ROOT, "audit")   # prompts moved out of eval/
+
+from audit import run as arena  # noqa: E402
 
 # screen.md went with arm C. rubric.md is the judge, extract.md the
 # cheap stage.
@@ -45,7 +47,7 @@ def test_comments_are_stripped_before_sending():
     """And that the files still HAVE comments, or this tests nothing."""
     documented = 0
     for name in PROMPTS:
-        raw = open(os.path.join(ROOT, "eval", f"{name}.md")).read()
+        raw = open(os.path.join(PROMPT_DIR, f"{name}.md")).read()
         sent = arena.prompt(name)
         assert "<!--" not in sent and "-->" not in sent, \
             f"{name}.md leaks its comment block to the model"
@@ -71,7 +73,7 @@ def test_leak_guard_fires_on_an_injected_eval_row():
         return
     import json
     row = json.loads(open(labels).readline())
-    path = os.path.join(ROOT, "eval", "rubric.md")
+    path = os.path.join(PROMPT_DIR, "rubric.md")
     original = open(path).read()
     try:
         with open(path, "a") as fh:
@@ -111,4 +113,4 @@ def test_arm_b_caps_are_enforced_not_requested():
     # operator messages keep their per-message cap
     assert len(("m" * 5000)[: config.OPERATOR_MSG_CHARS]) == config.OPERATOR_MSG_CHARS
     assert "TODAY_GOAL_CHARS" not in open(
-        os.path.join(ROOT, "eval", "extract.md")).read()
+        os.path.join(PROMPT_DIR, "extract.md")).read()

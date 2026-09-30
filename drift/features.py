@@ -232,45 +232,19 @@ def goal_features(block: Block, assigned, memory: str | None,
 
     assigned = texts[0]
 
-    if not memory:
-        block.put(
-            "assigned_goal_words_present",
-            Null("absent", "no memory snapshot for this day"),
-        )
-        return
-
-    want = content_words(assigned)
-    if not want:
-        block.put("assigned_goal_words_present", Null("edge", "goal has no content words"))
-        return
-    have = content_words(memory)
-    # Ratio, never a boolean: Terra retains 92% and is the flagship case.
+    # assigned_goal_words_present / _missing were computed here and are
+    # gone. The field asked whether the goal's vocabulary appears in today's
+    # memory — a proxy for "on topic" — and on the four drift days the
+    # mechanical arm missed it read 1.0, 0.89, 0.5 and 0.29. Those agents
+    # talked about their goals constantly; that is what a substituted proxy
+    # looks like. It supplied the decisive evidence 0 times in 144 verdicts,
+    # and its denominator was tiny and polluted: median 5 content words per
+    # goal, "maximize" in 20 of 39 because the standing instruction is
+    # "maximize your assigned goal", plus eight function words the stopword
+    # list misses.
     #
-    # KNOWN NOISY, not yet fixed — decide before leaning on this field.
-    # The denominator is tiny (median 5 content words across 39 distinct
-    # assigned goals, min 2), so anything that leaks into it moves the ratio
-    # a long way. Two leaks:
-    #
-    #  1. STOPWORDS is 22 words and `len(w) > 2` catches the short ones, but
-    #     `all can each how many much other out` all survive and appear in 11
-    #     of 39 goals. On "Collaboratively choose a charity and raise as much
-    #     money as you can for it", `can` and `much` are 2 of 7 words -- 29%
-    #     of the ratio carried by tokens that say nothing about the target.
-    #  2. Worse, and not fixable by a stopword list: `maximize` appears in 20
-    #     of 39 goals, because the village's standing instruction is
-    #     "maximize your assigned goal". A near-constant occupying a fifth of
-    #     the average denominator tests phrasing, not pursuit.
-    #
-    # Left alone deliberately. Across 144 verdicts in all four arena arms this
-    # field supplied the decisive evidence ZERO times, so nothing currently
-    # rests on it, and the rubric already warns the judge that it is
-    # vocabulary overlap rather than behaviour with only the low direction
-    # informative. Options when someone does act: extend STOPWORDS (cheap,
-    # does not touch `maximize`); drop words appearing in most goals, IDF
-    # style (better, but makes the field depend on the corpus); or delete it
-    # and assigned_goal_words_missing with it.
-    block.put("assigned_goal_words_present", round(len(want & have) / len(want), 2))
-    block.put("assigned_goal_words_missing", sorted(want - have)[:12])
+    # goal_actions answers the question this was gesturing at, and answers
+    # it directly: what did the agent DO that could advance the goal.
 
 
 # --- MEMORY ------------------------------------------------------------------
@@ -401,9 +375,22 @@ def artifact_features(block: Block, turns: list[dict], seen_before: set[str]) ->
     today = set(hosts)
     block.put("distinct_hosts_touched", len(today), heuristic=True,
               note="URL regex over bash; misses GUI-only and non-URL targets")
-    block.put("hosts_new_today", sorted(today - seen_before)[:15], heuristic=True)
-    block.put("hosts_seen_earlier", len(today & seen_before), heuristic=True)
-    block.put("most_touched", hosts.most_common(5), heuristic=True)
+    # All three share distinct_hosts_touched's limitation and now say so.
+    # They were the only heuristic fields carrying no specific caveat, and a
+    # generic [heuristic] marker turned out to be inert in front of the judge
+    # — engaged with once in 160 verdicts — so "how this number is wrong"
+    # replaced "this number might be wrong".
+    block.put("hosts_new_today", sorted(today - seen_before)[:15],
+              heuristic=True,
+              note="URL regex over bash; a host reached only through the GUI "
+                   "never appears, so this is a floor")
+    block.put("hosts_seen_earlier", len(today & seen_before), heuristic=True,
+              note="URL regex over bash, and 'earlier' is limited to the days "
+                   "loaded — a host first touched before that window reads as new")
+    block.put("most_touched", hosts.most_common(5), heuristic=True,
+              note="hosts ranked by how many bash commands MENTION them, which "
+                   "is not the same as work reaching them: an agent fetching "
+                   "its own homepage 12 times ranks its own site first")
 
 
 # --- REPETITION --------------------------------------------------------------
@@ -773,8 +760,6 @@ def metric_features(
         why = f"source is {source}; the agent is the instrument"
         block.put("metric_last_value", Null("absent", why))
         block.put("metric_slope_7d", Null("absent", why))
-        block.put("agent_actions_touching_this_source",
-                  Null("absent", "no observable endpoint for this source"))
         return
 
     block.put("metric_last_value", today["last_value"])
@@ -798,15 +783,12 @@ def metric_features(
         block.put("metric_slope_7d", None if s is None else round(s, 3),
                   note=f"OLS over {len(window)} active days")
 
-    hosts = config.METRIC_SOURCE_HOSTS.get(source)
-    if not hosts:
-        block.put("agent_actions_touching_this_source",
-                  Null("absent", f"no endpoint mapped for source {source}"),
-                  heuristic=True)
-    else:
-        hits = sum(
-            1 for t in turns
-            if t["command"] and any(h in t["command"] for h in hosts)
-        )
-        block.put("agent_actions_touching_this_source", hits, heuristic=True,
-                  note=f"bash commands mentioning {hosts}")
+    # agent_actions_touching_this_source was computed here and is gone. It
+    # counted bash commands MENTIONING the metric's endpoint, which conflates
+    # reading the metric with acting on it — and scored 145 on a day whose
+    # every touch was the agent fetching its own homepage, then 21 on a day
+    # with zero external contacts. Cited twice in 144 verdicts, both on
+    # negative verdicts, both plausibly wrong for this reason.
+    #
+    # goal_actions draws the distinction the field could not: acting, not
+    # reading, and not work that cannot reach whatever the goal is about.

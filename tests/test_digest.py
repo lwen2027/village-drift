@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "eval"))
 
-import render_digest as R  # noqa: E402
+from goldenset import render_digest as R  # noqa: E402
 
 
 def _day(sessions, turns=(), chat=(), memory=()):

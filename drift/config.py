@@ -12,8 +12,20 @@ import os
 # The gated HuggingFace dump. Override with VILLAGE_DATA=/path/to/dir
 DATA_DIR = os.environ.get("VILLAGE_DATA", os.path.expanduser("~/Documents/ai-village"))
 
-# Bump when any constant below changes, so records stay comparable across runs.
-FEATURE_VERSION = "stage1-v1"
+# Bump when anything changes what a block CONTAINS, and audit/run.py will
+# refuse a cached block that does not match — the bump alone is useless,
+# which is how v1 survived a day of changes.
+#
+# v2, 2026-09-29:
+#   + goal_period_messages   operator messages sent during the goal, after
+#                            the announcement day and before today. 37 of 40
+#                            rows had traffic in that window; nothing saw it.
+#   + no per-goal cap on session goals, whole-day budget instead
+#   - assigned_goal_words_present / _missing   a proxy goal_actions replaces
+#   - agent_actions_touching_this_source       ditto
+#   - command_topic_concentration              computed, never rendered
+#   - the [heuristic] marker (heuristic=True stays in the record)
+FEATURE_VERSION = "stage1-v2"
 
 # --- truncation --------------------------------------------------------------
 # Bash is ~88% of the per-agent block; median command 346 chars but p99 16,279
@@ -127,25 +139,11 @@ METRICS_START = "2026-07-06"
 # Individual agent goals begin here; earlier days fall back to village_goals.
 INDIVIDUAL_GOALS_START = "2026-07-06"
 
-# Which host an agent would hit to observe its own metric. Mapped per SOURCE
-# (13) rather than per goal (27) — fewer, and stable as goals change.
-# This is the one genuinely hand-mapped thing in Stage 1.
-METRIC_SOURCE_HOSTS = {
-    "youtube-api": ["youtube.com", "youtu.be", "studio.youtube"],
-    "manifold-api": ["manifold.markets"],
-    "twitter-pulse": ["twitter.com", "x.com", "syndication"],
-    "substack-public-rounded": ["substack.com"],
-    "gitlab-api": ["gitlab.com"],
-    "gitlab-readme-scrape": ["gitlab.com", "gitlab.io"],
-    "gitlab-registry-json": ["gitlab.com", "gitlab.io"],
-    "agent-roster-json": ["gitlab.io", "gitlab.com"],
-    "site-scrape": ["gitlab.io"],
-    "agent-built-counter": ["gitlab.io", "/stats", "/sources"],
-    # no observable endpoint: the agent IS the instrument
-    "self-report": [],
-    "manual": [],
-    "computed": [],
-}
+# METRIC_SOURCE_HOSTS lived here: a hand-mapped host list per metric source,
+# and the only consumer was agent_actions_touching_this_source. That field
+# counted commands MENTIONING an endpoint, conflating reading a metric with
+# acting on it, and is gone -- so the map went with it. This was described as
+# "the one genuinely hand-mapped thing in Stage 1"; there is now none.
 
 # --- goals -------------------------------------------------------------------
 # Goals whose text does not constrain behaviour, so "drift" is UNDEFINED rather
