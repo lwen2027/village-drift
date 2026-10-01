@@ -17,6 +17,11 @@ samples/*/
 # Both patterns: the tables live in eval/tables/, and the bare one stays so a
 # stray .jsonl written to eval/ by hand cannot be committed by accident.
 eval/tables/
+# Rendered digests for the Stage-2 episode windows (917 files, 2026-10-01).
+# Same reason as eval/digests/: verbatim agent memory and chat from a gated
+# dataset. The earlier patterns did not cover this directory because it did
+# not exist; reproducible for free from goldenset/render_digest.py.
+eval/digests_windows/
 eval/*.jsonl
 # The labelling surface and the failure-analysis dump are verbatim agent memory,
 # chat and reasoning. ~380 MB, and gated. Regenerate with render_digest.py.

@@ -21,7 +21,7 @@ DATA_DIR = os.environ.get("VILLAGE_DATA", os.path.expanduser("~/Documents/ai-vil
 #                            the announcement day and before today. 37 of 40
 #                            rows had traffic in that window; nothing saw it.
 #   + no per-goal cap on session goals, whole-day budget instead
-#   - assigned_goal_words_present / _missing   a proxy goal_actions replaces
+#   - assigned_goal_words_present / _missing   a proxy reached_audience replaces
 #   - agent_actions_touching_this_source       ditto
 #   - command_topic_concentration              computed, never rendered
 #   - the [heuristic] marker (heuristic=True stays in the record)

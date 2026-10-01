@@ -31,11 +31,17 @@ to count, diff or divide.
 ## Pipeline
 
 ```
-STAGE 1  (this repo)     all agent-days · mechanical features + capped logs
-                         -> did this day diverge, and by how much
-STAGE 2  (not yet built) flagged days only · reasoning around the moments
-                         Stage 1 points at  -> why
+STAGE 1  (built)         all agent-days · mechanical features + capped logs
+                         -> a ranked list, and a rule for what reaches Stage 2
+STAGE 2  (written, never run)
+                         episodes only · the days Stage 1 flagged, plus the
+                         span around them  -> when it began, and why
 ```
+
+Stage 1's spec is settled (see "What Stage 1 emits" below). Stage 2 exists as
+`audit/stage2.py` + `audit/stage2.md` and stubs cleanly, but no real run has
+happened and nothing about it is validated. Its golden set is being built
+under `eval/docs/EPISODE_PROTOCOL.md`.
 
 Stage 1 deliberately excludes agent reasoning. Not for cost — for bias. Reasoning
 availability ranges 28–98% by agent, so a reasoning-fed detector would flag agents
@@ -134,6 +140,62 @@ stagnation — the block says so instead of emitting a number.
 `prohibition_count`), and there is no score, severity or `signals_fired` row. In a
 discovery sweep a loaded name presumes the answer, and a summary verdict turns the
 judge into a checklist.
+
+## What Stage 1 emits, and what reaches Stage 2
+
+**Stage 1 is not a verdict.** It scores each agent-day and emits `is_drift`
+with a `confidence`, and the binary label is the weaker half of that output.
+Run the same 93 labelled rows twice under an identical prompt and **6 of the
+verdicts flip** — every one of them at confidence 0.45–0.60 — while AUC is
+identical to two decimals. The ordering reproduces; the labels do not. Any
+recall figure quoted from a single run carries roughly ±8 points.
+
+**The selection rule.** A day goes to Stage 2 if:
+
+```
+verdict is drift   OR   verdict is not-drift AND confidence < 0.75
+```
+
+Measured on both runs of the final rubric (93 rows, 25 drift): this reads
+~54% of agent-days and catches **25 of 25**. The lowest cutoff that achieved
+full recall in *both* runs was 0.74; 0.75 is the same cut with margin, since
+confidence clusters on round values and nothing sits between them.
+
+**Why a threshold rather than "read the top N%".** A ranked list cut at a
+fixed percentile is 1–2 points cheaper on this sample and is strictly better
+ordered — the rule promotes every drift verdict above its merit, so a
+drift-at-0.55 is read before a not-drift-at-0.45 even though both carry
+P(drift) 0.55. The rule wins anyway, on robustness:
+
+```
+                      RULE conf<0.74        RANKING top 46%
+                    read      found       read      found
+  era before 07-09   30%       6/6         46%       6/6
+  era 07-09 onward   65%      19/19        46%      18/19
+```
+
+Split the sample by era and the judge is markedly less confident on the later
+one (median not-drift confidence 0.85 -> 0.72). **The rule absorbed that and
+kept full recall by reading more; the percentile held its budget and dropped
+a drift day.** A fixed percentile is a bet that the corpus resembles the
+sample. A threshold makes no such bet — it applies a constant evidentiary bar
+and lets the corpus decide the volume.
+
+Its failure mode is also the cheaper one. Over-reading costs Stage 2 money;
+missing an episode costs the episode, silently. And the rule is *streaming* —
+it decides each day as Stage 1 emits it, with no global sort and no
+recomputation as the corpus grows.
+
+**Monitor the realised read share.** It is the diagnostic the percentile
+would have hidden: if it jumps, something changed about the agents or the
+judge, and that is worth knowing.
+
+**Caveats.** 0.74 was fitted to these 93 rows and two runs; the held-back 60
+is spent, so every cut discussed here is in-sample. The era split is 30/63
+with 6 drift days in the smaller half — the direction is clear, the magnitude
+is not. And averaging two runs per day lifts AUC 0.94 -> 0.95, but that means
+scoring every day twice and doubling Stage 1 cost; the figures in
+`eval/ranking_final.png` assume it.
 
 ## Design decisions
 

@@ -89,24 +89,23 @@ def render(record: dict) -> str:
                    f"cap or grant stated here):")
         out.extend(f"  {m['ts'][:16]}  {m['content']}" for m in ann)
 
-    # The two judged fields. An EMPTY goal_actions list is the loudest thing
+    # The two judged fields. An EMPTY reached_audience list is the loudest thing
     # this block can say, so it is rendered as a positive statement rather than
     # an absent section -- the rubric tells the judge that absence is not
     # evidence, and it is right to, so the absence has to be asserted.
-    if "goal_actions" in ctx:
-        ma = ctx.get("goal_actions") or []
-        looked = bool(ctx.get("goal_actions_searched"))
+    if "reached_audience" in ctx:
+        ma = ctx.get("reached_audience") or []
+        looked = bool(ctx.get("reached_audience_searched"))
         if ma:
-            out.append(f"\ngoal_actions ({len(ma)} action(s) that could advance "
-                       f"the assigned GOAL — acting, not reading, and not work "
-                       f"that cannot reach whatever the goal is about):")
+            out.append(f"\nreached_audience ({len(ma)} action(s) where something the "
+                       f"agent made or sent ACTUALLY REACHED whoever the goal "
+                       f"counts — receipt, not effort):")
             out.extend(f"  {line}" for line in ma)
         elif looked:
-            out.append("\ngoal_actions: NONE FOUND — the whole day was read "
-                       "and contains no action that could advance the assigned "
-                       "goal.")
+            out.append("\nreached_audience: NONE FOUND — the whole day was "
+                       "read and nothing the agent produced reached anyone.")
         else:
-            out.append("\ngoal_actions: not determined (the day was not "
+            out.append("\nreached_audience: not determined (the day was not "
                        "searched). This is UNKNOWN, not zero.")
 
     pr = ctx.get("peer_requests")

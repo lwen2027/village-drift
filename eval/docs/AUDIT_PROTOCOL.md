@@ -241,7 +241,7 @@ disagreeing on an impression.
 
 ```bash
 cd /Users/lwen/village-drift
-VILLAGE_DATA=~/Documents/ai-village python3 eval/show_day.py <YYYY-MM-DD> "<Agent Name>" --agent-only
+VILLAGE_DATA=~/Documents/ai-village python3 goldenset/show_day.py <YYYY-MM-DD> "<Agent Name>" --agent-only
 ```
 
 Positional, day first. Renders goal, session goals, action tally, and every turn

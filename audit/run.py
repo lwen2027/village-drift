@@ -301,6 +301,7 @@ def _read_sse(resp):
 # the old 100K value, which was set when arms B and C still read digests.
 MAX_INPUT_TOKENS = int(os.environ.get("ARENA_MAX_INPUT_TOKENS", "950000"))
 
+
 # Measured against API-reported usage across all three arms: 1.88 (arm A),
 # 1.96 (arm B), 3.05 (arm C). NOT the ~4 that prose averages -- this content
 # is bash, JSON, hashes and base64, which tokenise densely. Estimating at 4
@@ -343,11 +344,32 @@ def call(model, system, user, stub=False):
         # winning arm, silently unused. Verify with the usage field, never by
         # reading the code: a cache that is not hit looks exactly like one
         # that is absent.
-        d = _post(ANTHROPIC, {"model": model, "max_tokens": 4000,
+        # NO `thinking` KEY, ON PURPOSE. This model thinks by default and
+        # the parameter is not a lever -- probed against the live API:
+        #
+        #   no thinking key            OK, identical output tokens
+        #   {"type":"adaptive"}        OK, identical output tokens
+        #   adaptive + effort=high     400  "Extra inputs are not permitted"
+        #   adaptive + effort=max      400  same
+        #   enabled + budget_tokens    400  "not supported for this model"
+        #
+        # The response carries a `thinking` block either way, with the text
+        # empty and only a signature: the reasoning happens and is redacted.
+        # So there is no off, no budget and no effort dial; adding the key
+        # only implies a control that does not exist.
+        #
+        # max_tokens 16000, not 4000. It has to cover the thinking AND the
+        # answer, and since the thinking is invisible a long one could have
+        # been truncated before any JSON was written. Whether that ever
+        # happened is unknown, which is reason enough.
+        d = _post(ANTHROPIC, {"model": model, "max_tokens": 16000,
                               "system": [{"type": "text", "text": system,
                                           "cache_control": {"type": "ephemeral"}}],
                               "messages": [{"role": "user", "content": user}]},
                   {"x-api-key": key, "anthropic-version": "2023-06-01"})
+        # type == "text" only. With thinking on the response also carries
+        # `thinking` blocks, and concatenating those would hand the JSON
+        # parser a wall of reasoning prose before the object.
         text = "".join(b.get("text", "") for b in d.get("content", [])
                        if b.get("type") == "text")
         u = d.get("usage", {})
@@ -365,9 +387,18 @@ def call(model, system, user, stub=False):
                            {"role": "user", "content": user}]},
               {"Authorization": f"Bearer {key}"}, timeout=1800)
     u = d.get("usage", {})
-    return (d["choices"][0]["message"]["content"],
-            {"input_tokens": u.get("prompt_tokens"),
-             "output_tokens": u.get("completion_tokens")})
+    # cached_tokens too. Without it we could not tell whether the cheap model
+    # caches, and it carries 92% of all input -- the same blind spot that hid
+    # the Anthropic cache_control bug, where caching looked absent because
+    # nothing read the field. Expect ~0 here: the only shared prefix is
+    # extract.md at ~270 tokens, under the 1024 minimum, and the day itself
+    # is unique per row. Measured beats assumed.
+    cached = ((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+    out = {"input_tokens": (u.get("prompt_tokens") or 0) - cached,
+           "output_tokens": u.get("completion_tokens")}
+    if cached:
+        out["cache_read_input_tokens"] = cached
+    return d["choices"][0]["message"]["content"], out
 
 
 def _safe(agent):
@@ -656,7 +687,23 @@ def locates(quote, agent, day, haystacks={}):
 
 
 # ------------------------------------------------------------------- run ----
-def run(rows, arm="B", stub=False, limit=None):
+def run_path(arm, agent, day, tag=None):
+    """Where one verdict is cached.
+
+    `tag` keeps measurements apart. Without it a hybrid verdict for
+    GPT-5.5 2026-08-20 overwrites the bake-off's arm-B verdict for the same
+    row — and those 160 runs are the only baseline there is to compare a
+    change against. The cache key was (arm, agent, day) and nothing in it
+    recorded WHICH experiment a verdict belonged to.
+
+    Untagged keeps the original filename, so the existing runs stay where
+    they are and stay scoreable.
+    """
+    stem = f"{arm}-{tag}" if tag else arm
+    return os.path.join(RUNS, f"{stem}__{_safe(agent)}__{day}.json")
+
+
+def run(rows, arm="B", stub=False, limit=None, tag=None, workers=4):
     """One arm over the sample. Every call is cached to disk keyed by
     (arm, agent, day), so a crash or a rerun costs nothing and cannot
     double-bill. Delete a cache file to force one row to re-run."""
@@ -665,13 +712,32 @@ def run(rows, arm="B", stub=False, limit=None):
     # the audit has to process 4,027 agent-days, none of which are in it.
     rows = list(rows)[:limit]
     os.makedirs(RUNS, exist_ok=True)
+
+    # CONCURRENT, because the rows are independent and the work is almost all
+    # waiting: a row is two API calls and ~110K tokens of prefill, 30s wall
+    # clock of which the client spends ~none. Sequential, 60 rows is half an
+    # hour.
+    #
+    # 4, not 40. Running two ARMS at once previously produced HTTP 400s on
+    # the largest requests that succeeded immediately when retried alone --
+    # load, not content -- and the biggest days are disproportionately the
+    # interesting ones, so failures there bias the sample. _post retries
+    # those now, but a small pool keeps the retries rare rather than routine.
+    #
+    # Every row writes its own file and shares no mutable state, so the only
+    # thing needing a lock is the progress line.
+    import concurrent.futures as _cf
+    import threading
+    lock = threading.Lock()
     done = 0
-    for r in rows:
+
+    def _one(r):
+        nonlocal done
         agent, day = r["agent"], r["day"]
-        out = os.path.join(RUNS, f"{arm}__{_safe(agent)}__{day}.json")
+        out = run_path(arm, agent, day, tag)
         if os.path.exists(out):
-            continue
-        rec = {"arm": arm, "agent": agent, "day": day, "calls": [],
+            return
+        rec = {"arm": arm, "tag": tag, "agent": agent, "day": day, "calls": [],
                "salvaged": False, "error": None}
         try:
             src = arm_input(arm, agent, day)
@@ -723,17 +789,23 @@ def run(rows, arm="B", stub=False, limit=None):
                         if not os.path.exists(_blk):
                             raise SystemExit(
                                 f"no cached block for {agent} {day} -- run prep")
-                        rec = json.load(open(_blk))
-                        rec.setdefault("context", {})
-                        ma = obj.get("goal_actions")
-                        rec["context"]["goal_actions"] = (
+                        # `block`, NOT `rec`. This read `rec = json.load(...)`
+                        # and clobbered the RUN RECORD with the block, so the
+                        # next line to touch rec["calls"] raised KeyError and
+                        # every hybrid row failed. Caught by a --stub dry run
+                        # before any money was spent; nothing about the shapes
+                        # made it visible by reading.
+                        block = json.load(open(_blk))
+                        block.setdefault("context", {})
+                        ma = obj.get("reached_audience")
+                        block["context"]["reached_audience"] = (
                             ma if isinstance(ma, list) else [])
-                        rec["context"]["goal_actions_searched"] = bool(
-                            obj.get("goal_actions_searched"))
+                        block["context"]["reached_audience_searched"] = bool(
+                            obj.get("reached_audience_searched"))
                         pr = obj.get("peer_requests")
-                        rec["context"]["peer_requests"] = (
+                        block["context"]["peer_requests"] = (
                             pr if isinstance(pr, list) else [])
-                        payload = _R.render(rec)
+                        payload = _R.render(block)
                     else:
                         # The cheap stage returned something that is not a
                         # dict. There is no block to build, so fail the row
@@ -764,8 +836,18 @@ def run(rows, arm="B", stub=False, limit=None):
                                    os.environ.get("OPENAI_API_KEY"))
         with open(out, "w") as fh:
             json.dump(rec, fh, ensure_ascii=False)
-        done += 1
-        print(f"  {arm} {agent} {day}"
-              + (f"  ERROR {rec['error'][:60]}" if rec["error"] else ""))
+        with lock:
+            done += 1
+            print(f"  [{done}] {arm} {agent} {day}"
+                  + (f"  ERROR {rec['error'][:60]}" if rec["error"] else ""),
+                  flush=True)
+
+    if workers > 1 and not stub:
+        with _cf.ThreadPoolExecutor(max_workers=workers) as ex:
+            for f in _cf.as_completed([ex.submit(_one, r) for r in rows]):
+                f.result()
+    else:
+        for r in rows:
+            _one(r)
     print(f"arm {arm}: {done} new, {len(rows) - done} cached")
 

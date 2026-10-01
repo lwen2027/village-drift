@@ -11,7 +11,7 @@ That means two populations, kept in separate files so they cannot be confused.
 | question | was this day spent on the assigned goal? | when did it start, why, what was available, was it corrected? |
 | evidence | that day's digest | a multi-day trace |
 | cost | ~15 min/day, 100 days | hours each, ~10-15 episodes |
-| table | `eval_100.jsonl` + `verification.jsonl` | `episodes.jsonl` |
+| table | `eval_100.jsonl` + `verification.jsonl` | `episodes_mechanical.jsonl` |
 
 Mixing them is what produced the conflation this repo kept hitting: multi-day
 investigation leaking into a single-day verdict. 23 of the 50 turning points
@@ -37,7 +37,7 @@ eval/
       verification.jsonl     per-claim evidence for those labels, same-day only
       train_23.jsonl         the hand-read cases the codebook came from
     stage2/                unit: episode.    target: onset, mechanism
-      episodes.jsonl
+      episodes_mechanical.jsonl
   digests/  raw/           the labelling surface and the full dumps
   *.py                     the scripts
 ```
@@ -54,7 +54,7 @@ and this section in step.
 | `tables/stage1/verification.jsonl` | per-claim evidence behind each label | same-day only; cross-day material belongs to Stage 2 |
 | `digests/<day>__<agent>.txt` | the labelling surface | the **only** thing the labeller reads |
 | `raw/<day>/<agent>.json` | complete untruncated agent-day | failure analysis **only** — never an arm's input |
-| `tables/stage2/episodes.jsonl` | Stage-2 ground truth | onset, timeline, corrections, mechanism; keyed `(agent, onset)` |
+| `tables/stage2/episodes_mechanical.jsonl` | Stage-2 CANDIDATES, not ground truth | the `(agent, goal)` grouping of eval_100 drift days. Ground truth will be `episodes_golden.jsonl`, hand-labelled under EPISODE_PROTOCOL.md |
 | `predictions/<arm>.jsonl` | one row per method per day | what each arm said, and what it cost |
 
 Everything except the scripts is gitignored: digests and raw carry verbatim agent
@@ -64,9 +64,9 @@ memory, chat and reasoning from a gated dataset (~380 MB). Rebuild locally.
 export DATABASE_URI='postgresql://…'          # never commit
 export VILLAGE_DATA=~/Documents/ai-village
 
-python3 eval/build_train_set.py                   # -> train_23.jsonl
-python3 eval/sample_eval_set.py --seed 20260926   # -> eval_100.jsonl   (~40s)
-python3 eval/render_digest.py                     # -> digests/ + raw/  (~70s)
+python3 goldenset/build_train_set.py                   # -> train_23.jsonl
+python3 goldenset/sample_eval_set.py --seed 20260926   # -> eval_100.jsonl   (~40s)
+python3 goldenset/render_digest.py                     # -> digests/ + raw/  (~70s)
 # label, THEN:
 python3 eval/enrich_monitor.py --labels eval/tables/stage1/eval_100.jsonl
 ```
@@ -154,7 +154,7 @@ episode.
   "sources": [...], "notes": "…" }
 ```
 
-### `episodes.jsonl` — Stage-2 ground truth, one row per drift episode
+### `episodes_mechanical.jsonl` — Stage-2 CANDIDATES, one row per (agent, goal) group
 
 ```jsonc
 { "episode_id": "gpt-5-5__2026-08-20",

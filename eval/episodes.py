@@ -116,23 +116,41 @@ relabelled, scores highest of all. The metric ranks the relabelled day as
 more similar than the days doing the identical thing, which is the exact
 inversion of what the walk needs.
 
-THE FIX IS NOW IN THE RUBRIC. `day_activity` was added to the Stage-1 output
-contract on 2026-09-29: 3-8 words naming what the agent actually spent the
-day doing, in its own vocabulary. Three or four words against three or four
-words is comparable where 485 against 272 is not. `descriptor()` below
-prefers it and falls back to session goals, so this module works either way
--- but the fallback is the thing measured NOT to work, and a walk run on it
-should be read as a lower bound, not an answer.
+MEASURED 2026-09-30 ON 57 CONTIGUOUS DAYS, and the conclusion is that this
+module's whole approach is the wrong one. The contiguous pull that made the
+walk runnable at all is the first time any of this could be tested.
 
-NOTHING HAS BEEN RE-MEASURED WITH day_activity. It is an output-contract
-change and belongs in the single validation pass with the confidence
-threshold and the uncapped session goals. Re-calibrate the threshold on
-descriptors before trusting any activity_start this produces: the 0.10 here
-was fitted to whole-day bags of 100-600 words and means nothing against
-descriptors of four.
+The failure is not weak signal, it is an INVERTED SIGN. Jaccard against the
+onset day ranks the 32 days BEFORE the activity began ABOVE the 16 days of
+the activity itself -- AUC 0.158, where 0.5 is a coin flip. No threshold, no
+K and no bound fixes a sign error; they only choose which wrong day to stop
+on. Full grid in eval/walk_probe.py: 148 cells, 5 of them land within 3 days
+of truth and the best of those sits 0.00038 from a cut it must not make.
+
+`day_activity` was expected to fix this and DID NOT, in its original
+single-descriptor form. Asked to name the day's largest thread, the judge
+returned "Day 462 launch checkpoint coordination" for the onset day and
+never mentioned the marathon that was the actual drift -- because the
+activity an episode attaches to is routinely a MINORITY thread on the day
+it gets relabelled. Every mechanical way of picking it fails the same way:
+frequency picks the launch, longest-history picks infrastructure.
+
+The contract is now a LIST of 2-4 threads (audit/rubric.md, 2026-09-30),
+which fixes the sign -- AUC 0.727, and zero false matches across the 32
+pre-activity days. It is still not enough, because the activity's own NAME
+evolves: the same work is called "2048 on play2048.co", then "arithmetic
+batches via pty.fork()", then "Plundered Hearts (Infocom) manual play",
+then "keystroke victory marathon". Term overlap cannot see those as one
+activity. A model can, and does, exactly.
+
+SO THE WALK BELOW IS SUPERSEDED, not repaired. audit/walk.md holds a prompt
+that dates this episode correctly, and audit/stage2.py calls it. Do not tune
+SIM_THRESHOLD further -- the sign is wrong, and the one grid cell that works
+is noise. What remains useful here is the (agent, goal) grouping, onset, and
+MAX_GAP_DAYS, which audit/stage2.py reuses.
 
     python3 eval/episodes.py calibrate     # does descriptor matching work?
-    python3 eval/episodes.py build         # -> tables/stage2/episodes.jsonl
+    python3 eval/episodes.py build         # -> tables/stage2/episodes_mechanical.jsonl
 """
 
 from __future__ import annotations
@@ -154,7 +172,7 @@ TABLES = os.path.join(HERE, "tables")
 LABELS = os.path.join(TABLES, "stage1", "eval_100.jsonl")
 AUDIT = os.path.join(TABLES, "stage1", "verification.jsonl")
 RAW = os.path.join(HERE, "raw")
-OUT = os.path.join(TABLES, "stage2", "episodes.jsonl")
+OUT = os.path.join(TABLES, "stage2", "episodes_mechanical.jsonl")
 
 # eval/raw holds 58 NON-CONTIGUOUS days, which a chained walk cannot use: it
 # steps day to day, and the days are not adjacent. Built against it, 10 of 17
@@ -196,6 +214,10 @@ INDEX = os.path.join(TABLES, "stage2", "descriptor_index.json")
 STAGE2_FIELDS = ("activity_start", "activity_start_note",
                  "mechanism", "available_levers", "evidence")
 
+# ⚠ DEAD NUMBERS. Kept so walk_back() still runs, not because either value is
+# right. The similarity signal they threshold is INVERTED (AUC 0.158 against
+# the onset day) -- see the module docstring. Any activity_start this produces
+# is noise. audit/walk.md supersedes it. Do not tune these.
 SIM_THRESHOLD = 0.10
 TOLERANCE_DAYS = 3
 
@@ -227,17 +249,29 @@ def goal_text(row) -> str:
 
 
 def day_activity(agent: str, day: str) -> str | None:
-    """The Stage-1 judge's own one-line answer to "what was this day spent on".
+    """The Stage-1 judge's own answer to "what was this day spent on".
 
-    Returns None until a Stage-1 run made AFTER 2026-09-29 exists — the field
-    postdates every run currently on disk.
+    TWO SHAPES, because the output contract changed on 2026-09-30. Runs
+    before it return a single string naming the day's largest thread; runs
+    after return a LIST of 2-4 threads. The list is the one that works: the
+    activity an episode attaches to is routinely a minority thread, so
+    naming only the largest misses it -- on the one measured case the string
+    contract returned "Day 462 launch checkpoint coordination" and never
+    mentioned the marathon that was the actual drift.
+
+    A list used to arrive here and go through str(), which produced
+    "['a', 'b']" and fed the brackets and quotes to content_words as if they
+    were vocabulary. Joined instead.
     """
     import glob as _g
     for f in _g.glob(os.path.join(TABLES, "stage1", "arena_runs",
                                   f"*__{_safe(agent)}__{day}.json")):
         v = (json.load(open(f)) or {}).get("verdict") or {}
-        if v.get("day_activity"):
-            return str(v["day_activity"])
+        da = v.get("day_activity")
+        if isinstance(da, list) and da:
+            return " ".join(str(x) for x in da)
+        if da:
+            return str(da)
     return None
 
 

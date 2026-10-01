@@ -16,7 +16,13 @@ import json
 import os
 import sys
 
-RAW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "raw")
+# eval/raw, not goldenset/raw. The 2026-09-29 repo split moved this file into
+# goldenset/ and the path followed it, pointing at a directory that has never
+# existed -- `--list` raised FileNotFoundError from then until 2026-10-01.
+# render_digest.main() writes the dump here (--raw, default eval/raw) and that
+# is where it has always been.
+RAW = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   "eval", "raw")
 
 
 def one(s) -> str:

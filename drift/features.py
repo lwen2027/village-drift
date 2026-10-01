@@ -243,7 +243,7 @@ def goal_features(block: Block, assigned, memory: str | None,
     # "maximize your assigned goal", plus eight function words the stopword
     # list misses.
     #
-    # goal_actions answers the question this was gesturing at, and answers
+    # reached_audience answers the question this was gesturing at, and answers
     # it directly: what did the agent DO that could advance the goal.
 
 
@@ -790,5 +790,5 @@ def metric_features(
     # with zero external contacts. Cited twice in 144 verdicts, both on
     # negative verdicts, both plausibly wrong for this reason.
     #
-    # goal_actions draws the distinction the field could not: acting, not
+    # reached_audience draws the distinction the field could not: acting, not
     # reading, and not work that cannot reach whatever the goal is about.

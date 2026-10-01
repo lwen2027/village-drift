@@ -41,7 +41,7 @@ needing aggregation, and 98% at copying verbatim text:
          goal_period_messages, outreach_constraints, prior snapshots),
          because a one-day reader structurally cannot see them
   model  reading 1,048 turns of raw day, which code cannot do, and the two
-         fields that need it -- goal_actions and peer_requests -- plus
+         fields that need it -- reached_audience and peer_requests -- plus
          verbatim copying
 
 THE OPEN PROBLEM IS RECALL, not arm choice. Both A and B sit at .60, so a
@@ -52,13 +52,16 @@ addressed but unmeasured:
   4 missed drifts   an agent producing substantial real work, none of which
                     could move its target. Read as "tried and was blocked",
                     which rule 2 exempts, when they are "never tried".
-                    -> goal_actions, with its three-way split
+                    -> reached_audience. NOTE: its first version asked for
+                    actions that could "plausibly advance the goal", which
+                    separates almost nothing (AUC 0.655) because plausibility
+                    is true of any competent work. Rewritten around RECEIPT.
   2 false alarms    work that looks off-goal in the agent's own session
                     goals and was asked for by someone else.
                     -> peer_requests
 
 QUEUED AND UNMEASURED, all against the held-back rows:
-  * goal_actions + peer_requests (extract.md)
+  * reached_audience + peer_requests (extract.md)
   * goal_period_messages (build.py) -- the operator channel nothing saw
   * day_activity (rubric.md) -- for Stage 2 episode dating
   * uncapped session goals, TODAY_GOAL_DAY_BUDGET (config.py)
@@ -79,6 +82,7 @@ from __future__ import annotations
 import argparse
 import collections
 import http.client
+import glob
 import json
 import os
 import random
@@ -107,6 +111,13 @@ MONITOR = os.path.expanduser("~/village-drift-monitor/monitor.jsonl")
 SEED = 20260928
 N = 40
 BROADCAST = "2026-08-12"     # the village-wide anti-drift message
+
+
+def rows_path(name):
+    """`--rows arena_40` is the bake-off sample; anything else is a rowset."""
+    return SAMPLE if name in (None, "arena_40") else os.path.join(
+        STAGE1, f"rowset_{name}.jsonl")
+
 
 def _load(path):
     with open(path) as fh:
@@ -151,6 +162,45 @@ def draw(n: int = N, seed: int = SEED) -> list[dict]:
 
     picked.sort(key=lambda r: (r["day"], r["agent"]))
     return picked
+
+
+def rowset(name: str, write: bool = False) -> None:
+    """A named set of rows from eval_100, minus everything already spent.
+
+    arena_40.jsonl is a table; the rows held back from it were only ever
+    "whatever is not in the 40" — a definition that is stable exactly as
+    long as arena_40 is, and that nothing on disk records. This writes the
+    set down so a measurement can name what it ran on.
+
+    EXCLUDES every row in every existing rowset, not just the 40. A method
+    scored twice on rows it was changed in response to is measuring its own
+    tuning, and the way that happens is by quietly reusing a set.
+
+    The 100 labels support ONE honest measurement of a changed method. This
+    command is deliberately general rather than a hardcoded `holdout`,
+    because the second measurement needs freshly LABELLED rows — see
+    goldenset/ — not a fresh slice of the same hundred.
+    """
+    out = os.path.join(STAGE1, f"rowset_{name}.jsonl")
+    if os.path.exists(out) and write:
+        print(f"refusing to overwrite {out}")
+        return
+    spent = set()
+    for f in [SAMPLE] + sorted(glob.glob(os.path.join(STAGE1, "rowset_*.jsonl"))):
+        if f == out or not os.path.exists(f):
+            continue
+        for r in _load(f):
+            spent.add((r["agent"], r["day"]))
+    picked = [r for r in _load(LABELS) if (r["agent"], r["day"]) not in spent]
+    print(f"  {len(spent)} rows already spent, {len(picked)} left")
+    _describe(picked)
+    if not write:
+        print(f"  (dry run — pass --write to persist as rowset_{name})")
+        return
+    with open(out, "w") as fh:
+        for r in picked:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"  -> {out}")
 
 
 def _describe(picked: list[dict]) -> None:
@@ -217,7 +267,7 @@ def baseline(picked: list[dict]) -> None:
 # this from git BEFORE trusting the result, and fix the bool branch first.
 
 
-def prep(force=False):
+def prep(force=False, rows=None):
     """Build every arm-A block in ONE pass.
 
     drift.build.build() rescans the whole 2.26M-row turns file on each call,
@@ -230,7 +280,12 @@ def prep(force=False):
     inherit this sample's size distribution, and day sizes are skewed. Counting
     the real thing removes that error entirely.
     """
-    rows = _load(SAMPLE)
+    # Rows are passed in, because prep derives the BUILD RANGE from them.
+    # Hardcoded to the 40, it built 2025-05-09..2026-08-27 and the holdout
+    # opens 2025-04-28 — eleven days earlier, so its first row had no block
+    # and run() stopped with "no cached block ... run prep first" after prep
+    # had just reported success.
+    rows = _load(SAMPLE) if rows is None else rows
     want = {(r["agent"], r["day"]) for r in rows}
     os.makedirs(BLOCKS, exist_ok=True)
     have = {k for k in want
@@ -273,7 +328,13 @@ def prep(force=False):
         stats = {"agent_days": len(corpus), "total_chars": sum(corpus),
                  "median_chars": sorted(corpus)[len(corpus) // 2],
                  "range": [days[0], days[-1]]}
-        with open(os.path.join(STAGE1, "arena_corpus_size.json"), "w") as fh:
+        # Keyed by the range it measured, not a single file every prep
+        # clobbers. The unkeyed version read 4,027 for months (the bake-off
+        # 40's window), was quoted corpus-wide in every cost estimate, and
+        # then silently became 1,020 when a 57-day Haiku prep ran over it.
+        # Two different numbers, same filename, no way to tell which you had.
+        name = f"arena_corpus_size__{days[0]}__{days[-1]}.json"
+        with open(os.path.join(STAGE1, name), "w") as fh:
             json.dump(stats, fh, indent=1)
         print(f"  corpus: {stats['agent_days']:,} agent-days in range, "
               f"{stats['total_chars']:,} block chars total "
@@ -282,7 +343,15 @@ def prep(force=False):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["draw", "baseline", "prep", "run", "score"])
+    ap.add_argument("cmd",
+                    choices=["draw", "rowset", "baseline", "prep", "run", "score"])
+    ap.add_argument("--name", default="holdout",
+                    help="rowset: what to call the set being written")
+    ap.add_argument("--rows", default="arena_40",
+                    help="which row set run/score operate on. Defaults to the "
+                         "bake-off sample, so existing commands are unchanged. "
+                         "Anything else also TAGS the run files, so a new "
+                         "measurement cannot overwrite the old one.")
     ap.add_argument("--arm", choices=["A", "B"])
     ap.add_argument("--stub", action="store_true",
                     help="exercise the whole path, including scoring, with no "
@@ -297,16 +366,27 @@ def main() -> int:
     a = ap.parse_args()
 
     if a.cmd == "prep":
-        prep(force=a.write)   # --write rebuilds blocks that already exist
+        path = rows_path(a.rows)
+        if not os.path.exists(path):
+            return print(f"no such row set: {path}") or 1
+        # --write rebuilds blocks that already exist
+        prep(force=a.write, rows=_load(path))
         return 0
 
+    if a.cmd == "rowset":
+        rowset(a.name, write=a.write)
+        return 0
     if a.cmd == "run":
         if not a.arm:
             return print("--arm A|B") or 1
-        A.run(_load(SAMPLE), arm=a.arm, stub=a.stub, limit=a.limit)
+        path = rows_path(a.rows)
+        if not os.path.exists(path):
+            return print(f"no such row set: {path}") or 1
+        tag = None if a.rows == "arena_40" else a.rows
+        A.run(_load(path), arm=a.arm, stub=a.stub, limit=a.limit, tag=tag)
         return 0
     if a.cmd == "score":
-        score()
+        score(tag=None if a.rows == "arena_40" else a.rows)
         return 0
     if a.cmd == "baseline":
         if not os.path.exists(SAMPLE):
@@ -343,13 +423,19 @@ def _prf(tp, fp, fn):
     return p, r, (2 * p * r / (p + r) if p + r else 0.0)
 
 
-def score(arms=("A", "B")):
-    gold = {(r["agent"], r["day"]): r for r in _load(SAMPLE)}
+def score(arms=("A", "B"), tag=None):
+    # Labels come from eval_100, not from the row set. Loading them from
+    # SAMPLE was the same coupling run() had -- it worked exactly as long as
+    # the only row set was the 40, and a holdout row then resolved to None
+    # and crashed on g["is_drift"]. The tag already restricts WHICH runs are
+    # scored; gold only has to be able to look any of them up.
+    gold = {(r["agent"], r["day"]): r for r in _load(LABELS)}
     print(f"{'arm':4s} {'n':>3} {'P':>5} {'R':>5} {'F1':>5} {'acc':>5} "
           f"{'abst':>5} {'quote ok':>9} {'salv':>5} {'in tok':>10} {'out tok':>9} "
           f"{'cached':>7} {'$/day':>7} {'$/corpus':>9}")
     for arm in arms:
-        files = [f for f in os.listdir(RUNS) if f.startswith(f"{arm}__")] \
+        stem = f"{arm}-{tag}__" if tag else f"{arm}__"
+        files = [f for f in os.listdir(RUNS) if f.startswith(stem)] \
             if os.path.isdir(RUNS) else []
         if not files:
             continue

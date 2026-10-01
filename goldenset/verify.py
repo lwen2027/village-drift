@@ -31,7 +31,7 @@ table too, so the two never drift apart.
 # "this day was off-goal" with "this episode was drift", and the detector only
 # ever sees a day. `carry_over` is the one multi-day flag kept here, and it is
 # context, not grounds. Onset and operator_corrections are Stage-2 fields and
-# live in episodes.jsonl; see the note in record().
+# live in episodes_mechanical.jsonl; see the note in record().
 #
 # A day_determinable flag was added here and removed. It was meant to mark
 # labels unreachable from a single day, but under a properly day-scoped
@@ -60,7 +60,7 @@ table too, so the two never drift apart.
 # duplicating it here only adds a number that can be wrong.
 #
 # When the divergence began at all — possibly on an earlier day — is `onset`,
-# and it is a Stage-2 field recorded in episodes.jsonl, not here.
+# and it is a Stage-2 field recorded in episodes_mechanical.jsonl, not here.
 
 from __future__ import annotations
 
@@ -169,7 +169,7 @@ def record(agent: str, day: str, *, claims, turning_points=(),
         row["goal_is_open"] = new_goal_is_open
         changed.append("goal_is_open")
     # ⚠ drift_onset and operator_corrections ARE NOT WRITABLE HERE. Both are
-    # STAGE-2 fields and live in episodes.jsonl; extract_episodes.py migrated
+    # STAGE-2 fields and live in episodes_mechanical.jsonl; extract_episodes.py migrated
     # them off the label rows and both keys are now absent from all 100.
     # Leaving the setters in place was a live bug: this function could put back
     # a field that migration deletes, and nothing would notice until the next
