@@ -466,7 +466,7 @@ def main() -> None:
     shas, sizes = {}, []
     for (agent, day), d in sorted(data.items()):
         txt = digest(agent, day, d, roster)
-        safe = agent.replace("/", "_").replace(" ", "_")
+        safe = config.safe_agent(agent)
         open(os.path.join(a.out, f"{day}__{safe}.txt"), "w").write(txt)
         shas[(agent, day)] = hashlib.sha256(txt.encode()).hexdigest()[:16]
         sizes.append(len(txt))

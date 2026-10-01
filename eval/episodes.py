@@ -32,17 +32,25 @@ without exception. Nothing in Stage 1 tells you when an episode began.
 WHY THE TWO STEPS USE DIFFERENT FILTERS, which looks like a bug and is not.
 `onset` is scoped to one goal and to drift days: the question is when this
 assignment started being departed from. `activity_start` deliberately drops
-both filters, because the activity an agent drifts to is routinely something
-it was already doing legitimately under a previous goal. Claude Haiku 4.5 is
-the case: onset 2026-07-06 16:06, seven minutes after a wellbeing goal
-landed, but the keystroke marathon it got attached to began 2026-06-15 under
-a games goal, on days that were not drift. Filter on goal or on is_drift and
-that day is unreachable by construction.
+both filters, because the activity an agent drifts to is sometimes something
+it was already doing legitimately under a previous goal. Filter on goal or
+on is_drift and such a day is unreachable by construction.
 
-The pair is the point. Haiku is 7 MINUTES on goal->onset and 21 DAYS on
-activity->onset, and that is what says "three weeks of legitimate work got
-relabelled" rather than "drifted immediately". One number alone says the
+The pair is the point: MINUTES on goal->onset against WEEKS on
+activity->onset is what says "work that was legitimate got relabelled"
+rather than "drifted immediately", and either number alone says the
 opposite of the truth.
+
+⚠ THE WORKED CASE LIVES IN eval/docs/EPISODE_PROTOCOL.md, NOT HERE. It used
+to be narrated in this docstring with timestamps, and the timestamps were
+wrong -- four errors, found only when a labeller was told to rebuild the
+case adversarially from the dump. Agent-specific precision in a docstring is
+precision nobody re-derives. One canonical account, pointers elsewhere.
+
+Note also that the relabelling shape turned out to be the EXCEPTION: across
+the 20-episode golden set the activity begins with the goal in seven cases
+and predates it meaningfully in one. The backward walk was designed around
+that one.
 
 WHAT THE MATCHER COMPARES, and what it does NOT. Raw session goals, as a
 content-word set. The first version read a descriptor out of the verdict's
@@ -166,6 +174,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+from drift import config  # noqa: E402
 from drift.features import content_words  # noqa: E402
 
 TABLES = os.path.join(HERE, "tables")
@@ -237,7 +246,7 @@ def _load(p):
 
 
 def _safe(agent: str) -> str:
-    return agent.replace("/", "_").replace(" ", "_")
+    return config.safe_agent(agent)   # canonical; see drift/config.py
 
 
 def goal_text(row) -> str:
@@ -380,13 +389,9 @@ def indexed_days(agent: str) -> list[str]:
     return sorted(k[len(pre):] for k in _INDEX if k.startswith(pre))
 
 
-def available_days(agent: str) -> list[str]:
-    """Days this agent has raw data for, oldest first."""
-    out = []
-    for day in sorted(os.listdir(RAW)) if os.path.isdir(RAW) else []:
-        if os.path.exists(os.path.join(RAW, day, f"{_safe(agent)}.json")):
-            out.append(day)
-    return out
+# available_days() stood here: a directory-walking version of the function
+# directly above it, which answers the same question off the prebuilt index.
+# Unreachable, and the slower of the two.
 
 
 # ------------------------------------------------------------------ walk ----
@@ -466,8 +471,13 @@ def calibrate(seed: int = 5) -> None:
             if x[0] != y[0]]
 
     def q(xs, p):
+        # max(0, ...) because int(p*len) is 0 for small n, and the -1 then
+        # wrapped to xs[-1] -- reporting the MAXIMUM as p10. q([.01,.02,.9],
+        # .10) returned 0.9. The full-corpus run has thousands of pairs so it
+        # does not fire now, but SIM_THRESHOLD is read off this table and the
+        # docstring records an earlier run on 15 pairs.
         xs = sorted(xs)
-        return xs[int(p * len(xs)) - 1] if xs else 0.0
+        return xs[max(0, int(p * len(xs)) - 1)] if xs else 0.0
 
     print(f"  {'pairs':34s} {'n':>5} {'p10':>6} {'median':>7} {'p90':>6}")
     for lbl, xs in (("same agent, <=3 days apart", [x[0] for x in near]),

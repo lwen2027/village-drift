@@ -195,6 +195,66 @@ PRICES = {
 USAGE_KEYS = ("input_tokens", "output_tokens",
               "cache_creation_input_tokens", "cache_read_input_tokens")
 
+# Cache multipliers. Reads bill at 0.1x base, WRITES at 1.25x.
+CACHE_READ_MULT, CACHE_WRITE_MULT = 0.1, 1.25
+
+
+def call_cost(usage, model):
+    """Dollars for ONE call's reported usage. None if the model is unpriced --
+    better no number than an invented one.
+
+    THE ONE PLACE THAT KNOWS THE PRICING RULE. It was previously rediscovered
+    in three: eval/arena.py's scorer, eval/arena_chart.py's cost(), and
+    audit/stage2.py's cost(). Each carries its own comment explaining the
+    0.1x/1.25x multipliers, which is how you can tell they were worked out
+    separately -- and stage2's simply omitted the 1.25x write, so every first
+    call of a batch under-reported. Callers keep their own AGGREGATION; only
+    the rule lives here.
+
+    A zero in cache_creation is not "writes are free" -- it means the prefix
+    was already warm from an earlier run. A cold run pays the write once per
+    distinct prefix, so do not read a 0 as the steady state.
+    """
+    p = PRICES.get(model)
+    if not p or p.get("in") is None or p.get("out") is None:
+        return None
+    u = usage or {}
+    return ((u.get("input_tokens") or 0) / 1e6 * p["in"]
+            + (u.get("output_tokens") or 0) / 1e6 * p["out"]
+            + (u.get("cache_read_input_tokens") or 0) / 1e6 * p["in"]
+            * CACHE_READ_MULT
+            + (u.get("cache_creation_input_tokens") or 0) / 1e6 * p["in"]
+            * CACHE_WRITE_MULT)
+
+
+def already_done(path, stub=False):
+    """Is there a usable PAID record at `path`? The resume rule, in one place.
+
+    Both runners need this and each had its own version -- except stage2.py
+    had none at all, so a batch that died partway re-billed every episode it
+    had already paid for and overwrote the results. Two refinements over the
+    bare os.path.exists this replaces:
+
+      * A STUB RECORD IS NOT DONE. --stub writes to the same path a paid run
+        uses, so a stubbed row otherwise makes the real run skip it forever.
+        The marker lives inside usage, which is why checking `error` missed
+        it. This is the same hazard that let stub rows poison the Stage 2
+        descriptor index.
+      * AN ERRORED RECORD IS NOT DONE. Retrying a failure is the behaviour
+        you want from a resume; skipping it forever means a transient API
+        error silently removes a row from the measurement.
+    """
+    if stub or not os.path.exists(path):
+        return False
+    try:
+        r = json.load(open(path))
+    except Exception:
+        return False                      # unreadable: redo it
+    if r.get("error"):
+        return False
+    return not any((c.get("usage") or {}).get("stub")
+                   for c in (r.get("calls") or []))
+
 
 def _redact(text, *secrets):
     """Exception text can contain the credential. urllib raises
@@ -402,7 +462,10 @@ def call(model, system, user, stub=False):
 
 
 def _safe(agent):
-    return agent.replace("/", "_").replace(" ", "_")
+    """Thin alias for config.safe_agent, kept because run._safe is imported
+    by name all over eval/. The definition, and the account of why six copies
+    of it was dangerous, are in drift/config.py."""
+    return config.safe_agent(agent)
 
 
 def _json(text):
@@ -435,32 +498,12 @@ MONITOR_EXCLUDED = {
 }
 
 
-def _day_section(agent, day, label):
-    """One day rendered monitor-style. Returns "" if the agent had no turns."""
-    path = os.path.join(RAW, day, f"{_safe(agent)}.json")
-    if not os.path.exists(path):
-        return ""
-    with open(path) as fh:
-        d = json.load(fh)
-    L = []
-    for c in d.get("chat") or []:
-        if not (c.get("own") or c.get("human")):
-            continue
-        who = "ME" if c.get("own") else (c.get("speaker") or "human")
-        L.append(f"  {str(c.get('ts'))[11:19]}  {who}: {c.get('content')}")
-    for t in d.get("turns") or []:
-        if (t.get("kind") or "") in MONITOR_EXCLUDED:
-            continue
-        ts = str(t.get("ts"))[11:19]
-        if t.get("text"):
-            L.append(f"  {ts}  said: {t['text']}")
-        L.append(f"  {ts}  > {t.get('kind')}"
-                 + (f" {t['command']}" if t.get("command") else ""))
-        for field, tag in (("output", ""), ("error", "[stderr] ")):
-            val = (t.get(field) or "").strip()
-            if val and val != "None":
-                L.append(f"      {tag}{val[: config.OUTPUT_CAP]}")
-    return f"\n{label} {day}\n" + "\n".join(L) if L else ""
+# _day_section() stood here: a per-day monitor-style renderer superseded by
+# monitor_view() below. It was unreachable, and it still carried the chat
+# filter monitor_view was fixed for on 2026-10-01 -- `if not (own or human):
+# continue`, which drops every peer message and is why peer_requests measured
+# empty on 13 of 14 days that contained an explicit request. Dead code holding
+# a known defect is a trap for whoever revives it.
 
 
 def monitor_view(agent, day):
@@ -505,11 +548,29 @@ def monitor_view(agent, day):
                  f"{'APPROVED' if c.get('approved') else 'DENIED'} {c.get('medium')}"
                  f" — {c.get('comment')}")
     L.append("")
-    L.append("CHAT (this agent's own messages and any from a human/operator)")
+    # Peer messages that NAME this agent are included as of 2026-10-01, and
+    # the field that needed them had been empty by construction until then.
+    # extract.md asks for `peer_requests` -- "requests this agent received
+    # from other agents" -- and rubric.md rule 3 tells the judge to weigh
+    # them, while this filter dropped every peer message before Luna saw it.
+    # Measured: 13 of the 14 eval days carrying an explicit @-addressed named
+    # request returned an empty list, and all 7 days that returned anything
+    # returned HUMAN requests, which were the only kind in scope.
+    #
+    # Named-only, not the whole room. All inbound peer chat is ~88K tokens at
+    # the median -- 3x this entire view -- which is why it was excluded in
+    # the first place. Filtering to messages that name the agent costs 772
+    # tokens at the median, 3% of the view, and is the subset the field is
+    # actually about.
+    _named = re.compile(r"@?\b" + re.escape(agent) + r"\b", re.I)
+    L.append("CHAT (this agent's own messages, any from a human/operator, "
+             "and peer messages that name this agent)")
     for c in d.get("chat") or []:
-        if not (c.get("own") or c.get("human")):
+        own, human = c.get("own"), c.get("human")
+        if not (own or human
+                or _named.search(str(c.get("content") or ""))):
             continue
-        who = "ME" if c.get("own") else (c.get("speaker") or "human")
+        who = "ME" if own else (c.get("speaker") or "human")
         L.append(f"  {str(c.get('ts'))[11:19]}  {who}: {c.get('content')}")
     L.append("")
     L.append("ACTIONS (chronological; cursor/screenshot/pause mechanics dropped, "
@@ -629,23 +690,6 @@ def _norm(s):
     return " ".join(s.lower().split())
 
 
-def day_text(agent, day):
-    """Everything the agent actually emitted, for locating a quote."""
-    p = os.path.join(RAW, day, f"{_safe(agent)}.json")
-    if not os.path.exists(p):
-        return None
-    d = json.load(open(p))
-    parts = []
-    for t in d.get("turns") or []:
-        for k in ("reasoning", "text", "command", "output", "error"):
-            if t.get(k):
-                parts.append(str(t[k]))
-    for k in ("chat", "memories", "sessions", "session_goals"):
-        for row in d.get(k) or []:
-            parts.append(json.dumps(row) if isinstance(row, dict) else str(row))
-    return _norm("\n".join(parts))
-
-
 def judge_quoted_real_text(quote, payload):
     """Did the judge invent its decisive quote?
 
@@ -664,29 +708,14 @@ def judge_quoted_real_text(quote, payload):
     return "located" if q in _norm(payload or "") else "NOT_FOUND"
 
 
-def locates(quote, agent, day, haystacks={}):
-    """Is the arm's decisive quote really in the day? A judge that invents its
-    evidence can still land the right label by luck, and at n=40 that is not
-    distinguishable from competence by F1 alone. This is measured per row with
-    no sampling noise, which makes it the sharper instrument here.
-
-    Short quotes match by accident, so anything under 25 normalised characters
-    is reported separately rather than counted as located."""
-    if not quote:
-        return "no_quote"
-    key = (agent, day)
-    if key not in haystacks:
-        haystacks[key] = day_text(agent, day)
-    hay = haystacks[key]
-    if hay is None:
-        return "no_raw"
-    q = _norm(quote)
-    if len(q) < 25:
-        return "too_short"
-    return "located" if q in hay else "NOT_FOUND"
+# day_text() and locates() stood here. They were the SELF-FETCHING version of
+# the quote check: locates() pulled its own haystack via day_text() and
+# memoised it in a mutable default. judge_quoted_real_text(quote, payload)
+# above replaced both -- it checks the quote against the payload the judge was
+# actually given, which is the right question, and is what eval/arena.py calls.
+# Neither was reachable.
 
 
-# ------------------------------------------------------------------- run ----
 def run_path(arm, agent, day, tag=None):
     """Where one verdict is cached.
 
@@ -735,7 +764,7 @@ def run(rows, arm="B", stub=False, limit=None, tag=None, workers=4):
         nonlocal done
         agent, day = r["agent"], r["day"]
         out = run_path(arm, agent, day, tag)
-        if os.path.exists(out):
+        if already_done(out, stub):
             return
         rec = {"arm": arm, "tag": tag, "agent": agent, "day": day, "calls": [],
                "salvaged": False, "error": None}

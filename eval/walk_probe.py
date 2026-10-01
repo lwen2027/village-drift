@@ -40,6 +40,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+from drift import config  # noqa: E402
 from drift.config import LOOKBACK_DAYS  # noqa: E402
 from drift.features import content_words  # noqa: E402
 
@@ -54,8 +55,9 @@ AGENT, LO, HI = "Claude Haiku 4.5", "2026-05-01", "2026-07-15"
 
 
 def _safe(a):
-    """arena_blocks filename convention; matches audit/run.py:_safe."""
-    return "".join(c if c.isalnum() or c in "-." else "_" for c in a)
+    """arena_blocks filename convention. This used to be a DIFFERENT rule
+    under a docstring claiming it matched run.py -- see drift/config.py."""
+    return config.safe_agent(a)
 
 
 ONSET = "2026-07-06"
@@ -534,10 +536,11 @@ def main(mode="all"):
           f"{ks} -- stable across every K tried.")
 
     # --------------------------------------------- 8. onset sensitivity
-    hdr("8. SENSITIVITY -- the docstring gives onset as BOTH 07-06 and 07-07")
-    print("  Line 38 says 2026-07-06 16:06; line 81 says 2026-07-07. Only")
-    print("  07-06 is 21 days from truth, so 07-06 is used above. Re-run of")
-    print("  the baseline with 07-07, for the record:\n")
+    hdr("8. SENSITIVITY -- onset has been written as BOTH 07-06 and 07-07")
+    print("  07-06 is the true onset (the turn that reverses the decision);")
+    print("  07-07 is the day the SAMPLE happened to label, and the episode")
+    print("  record carries that one. Only 07-06 is 21 days from truth, so")
+    print("  07-06 is used above. Re-run of the baseline with 07-07:\n")
     for thr in (0.06, 0.08, 0.10):
         for k in (1, 2, 3):
             st, _, stop = walk(days, order, "2026-07-07", jaccard, thr, k,

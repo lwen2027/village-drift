@@ -452,24 +452,12 @@ def score(arms=("A", "B"), tag=None):
                 tin += (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0) \
                     + (u.get("cache_creation_input_tokens") or 0)
                 tcache += u.get("cache_read_input_tokens") or 0
-                pr = PRICES.get(c.get("model"))
-                if pr:
-                    # Cache reads bill at 0.1x base and cache WRITES at 1.25x;
-                    # both were priced at zero here, so every cached arm looked
-                    # cheaper than it is. Worth ~2% on arms B and D and nothing
-                    # on A and C, which recorded no cache activity at all.
-                    #
-                    # cache_creation is 0 on every call in this sample, which is
-                    # not "writes are free" -- it means the prefix was already
-                    # warm from an earlier run whose records were deleted. A
-                    # cold production run pays the write once per distinct
-                    # prefix, so do not read a 0 here as the steady state.
-                    spend += ((u.get("input_tokens") or 0) / 1e6 * pr["in"]
-                              + (u.get("output_tokens") or 0) / 1e6 * pr["out"]
-                              + (u.get("cache_read_input_tokens") or 0)
-                              / 1e6 * pr["in"] * 0.1
-                              + (u.get("cache_creation_input_tokens") or 0)
-                              / 1e6 * pr["in"] * 1.25)
+                # Cache reads bill at 0.1x base and writes at 1.25x; both were
+                # priced at zero here once, so every cached arm looked cheaper
+                # than it is. Worth ~2% on arms B and D. The rule now lives in
+                # A.call_cost -- see there for why a 0 in cache_creation is
+                # not evidence that writes are free.
+                spend += A.call_cost(u, c.get("model")) or 0.0
                 tout += u.get("output_tokens") or 0
             salv += bool(rec.get("salvaged"))
             if rec.get("error"):

@@ -45,7 +45,12 @@ FILES = ("stage1/eval_100.jsonl", "stage1/train_23.jsonl",
 #
 # digests_windows is deliberately NOT here: 917 files rendered from the dump in
 # one free pass, so they are reproducible in a way the labels are not.
-DIRS = ("stage1/arena_runs", "stage1/arena_blocks", "stage2/labels")
+# stage2/explained is here for arena_runs' reason, not labels': those files
+# are PAID judge calls and the judge is sampled, so re-running costs money and
+# does not reproduce. It is empty of real runs today -- only a --stub record --
+# but it must be covered BEFORE the first paid Stage 2 batch, not after.
+DIRS = ("stage1/arena_runs", "stage1/arena_blocks", "stage2/labels",
+        "stage2/explained")
 
 
 def snapshot() -> str:

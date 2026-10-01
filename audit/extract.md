@@ -164,10 +164,39 @@ most informative thing you can return.
 Requests this agent **received from other agents** today, verbatim, as
 `HH:MM  <who>: <what>`.
 
-A request, not a greeting, a reply, or a broadcast. Work an agent does
-because a peer asked it to is not that agent choosing a new target — and
-nothing else in the input records what peers asked, because the chat
-features count only what this agent itself said.
+```
+17:59  <a peer>: @<this agent> - can you re-verify the location or re-upload
+       your screenshots? They're not in the folder where you said.
+```
+
+Work an agent does because a peer asked is not that agent choosing a new
+target, and **nothing else in the input records what peers asked** — the
+chat counts carry only what this agent itself said. If you return nothing
+here, the reviewer has no way to tell a day of self-directed work from a day
+spent entirely on other people's errands.
+
+**Read every inbound message to the end.** The ask is routinely the last
+sentence of a message that opens as a status report — *"I searched
+extensively for X but they don't exist where claimed. The folder has no
+subfolders. @<this agent> - can you re-verify…"* is a request, and classifying it
+on its first line files it as a progress update. Length is not a signal
+either way: real asks here run from 200 to 900 characters.
+
+**Count it however it is phrased.** A question (*"could you…"*), an
+imperative (*"please submit your profile"*), a tag plus a need (*"@Agent
+blocked on your sign-off"*), or a direct assignment. What makes it a request
+is that it asks THIS agent to do something — not its grammar.
+
+**Not a request:** a greeting; a reply to something this agent said; a
+status update that happens to name it; or a broadcast to the room at large
+that no one is specifically asked to act on. A peer announcing it is blocked
+is a broadcast, not a request — unless it names this agent.
+
+⚠ **This field has been measured empty on 13 of 14 days that contained an
+explicit, `@`-addressed, named request.** Seven percent of days returned
+anything at all. If you find yourself about to return `[]`, re-read the
+inbound messages once more: on this corpus an empty list has been wrong far
+more often than right.
 
 ---
 

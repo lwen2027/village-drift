@@ -131,9 +131,14 @@ DROP_ACTIONS = {
 # A flat self-reported metric is NO SIGNAL, not evidence. Treating it as
 # evidence reproduces the exact failure mechanical-over-judge exists to avoid.
 UNINSTRUMENTED_SOURCES = {"self-report", "manual"}
-# Several metrics switch self-report -> real instrument on this date; a slope
-# straddling it measures the instrument, not the agent.
-INSTRUMENT_CHANGE_DATE = "2026-08-14"
+# INSTRUMENT_CHANGE_DATE = "2026-08-14" stood here, for the fact that several
+# metrics switch self-report -> real instrument around then and a slope
+# straddling that measures the instrument rather than the agent. Nothing read
+# it, and nothing should: features.py enforces the rule EMPIRICALLY instead,
+# nulling the slope whenever last_source differs anywhere inside the window.
+# That is strictly better than a date -- it is per-metric, and it catches a
+# switch on any date rather than the one someone wrote down. It fires on
+# DeepSeek-V3.2 2026-08-17 in the current sample.
 # metric_datapoints does not exist before this.
 METRICS_START = "2026-07-06"
 # Individual agent goals begin here; earlier days fall back to village_goals.
@@ -180,3 +185,35 @@ STOPWORDS = {
     "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "is", "it",
     "of", "on", "or", "that", "the", "to", "with", "you", "your", "own",
 }
+
+
+def safe_agent(agent):
+    """Agent name -> filename token. THE canonical definition; import it.
+
+    It had been written out six times: audit/run.py, audit/stage2.py,
+    eval/episodes.py, eval/walk_probe.py, goldenset/show_day.py and
+    goldenset/render_digest.py. It lives in config because config is the one
+    module every layer already imports -- putting it in audit/ would make
+    goldenset/ depend upwards.
+
+    THE COPIES WERE NOT ALL THE SAME. eval/walk_probe.py's read
+
+        "".join(c if c.isalnum() or c in "-." else "_" for c in a)
+
+    under a docstring claiming it "matches audit/run.py:_safe". It does not:
+    it also rewrites parentheses, apostrophes, colons and plus signs. The 42
+    village agents happen to use only letters, digits, spaces, dots and
+    hyphens, so the two agreed on every name that has ever been passed -- and
+    would have diverged the day one did not.
+
+    That failure is silent by construction. Every block, digest and raw file
+    is keyed on this, the three stores use DIFFERENT templates
+
+        block    arena_blocks/<agent>__<day>.txt
+        digest   digests_windows/<day>__<agent>.txt      <- reversed
+        raw      raw/<day>/<agent>.json
+
+    and a mismatch raises nothing: the path simply does not exist, and every
+    consumer reports the day as having no data.
+    """
+    return agent.replace("/", "_").replace(" ", "_")

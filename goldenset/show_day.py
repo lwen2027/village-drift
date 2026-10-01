@@ -16,6 +16,10 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from drift import config  # noqa: E402
+
 # eval/raw, not goldenset/raw. The 2026-09-29 repo split moved this file into
 # goldenset/ and the path followed it, pointing at a directory that has never
 # existed -- `--list` raised FileNotFoundError from then until 2026-10-01.
@@ -34,7 +38,7 @@ def show(day: str, agent: str, agent_only: bool = False) -> str:
     agent's: the shared chat room (~935 msgs/day) and the memory history. Every
     turn this agent took is still rendered complete. Without it a single day is
     2.4 MB median, almost all of it other agents talking."""
-    path = os.path.join(RAW, day, agent.replace("/", "_").replace(" ", "_") + ".json")
+    path = os.path.join(RAW, day, config.safe_agent(agent) + ".json")
     d = json.load(open(path))
     L: list[str] = []
     A = L.append

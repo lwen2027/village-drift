@@ -150,16 +150,28 @@ verdicts flip** — every one of them at confidence 0.45–0.60 — while AUC is
 identical to two decimals. The ordering reproduces; the labels do not. Any
 recall figure quoted from a single run carries roughly ±8 points.
 
+> ⚠ That repeat measurement was taken on `B-final_a` vs `B-final_b`, and
+> `final_b` was destroyed by an unquoted shell glob on 2026-10-01. The
+> finding stands as recorded but **cannot be re-derived from the tree**;
+> re-establishing it means paying for another 100-row run. It is the reason
+> to read AUC rather than recall, so it is worth re-establishing eventually.
+
 **The selection rule.** A day goes to Stage 2 if:
 
 ```
-verdict is drift   OR   verdict is not-drift AND confidence < 0.75
+verdict is drift   OR   verdict is not-drift AND confidence < 0.74
 ```
 
-Measured on both runs of the final rubric (93 rows, 25 drift): this reads
-~54% of agent-days and catches **25 of 25**. The lowest cutoff that achieved
-full recall in *both* runs was 0.74; 0.75 is the same cut with margin, since
-confidence clusters on round values and nothing sits between them.
+Measured on `B-peerfix` (93 rows, 25 drift): this reads **53%** of agent-days
+and catches **25 of 25**.
+
+0.74 is chosen for margin, not for being the tightest cut that works. The
+lowest-confidence drift day the judge got wrong sits at 0.62, and confidence
+is quantized — the judge emits ~19 distinct values, five of them landing
+exactly on 0.62. A cut just above that would still score 25/25 here while
+separating nothing, and would miss any future drift day scored 0.65, 0.68,
+0.70 or 0.72 — all buckets that are already populated. The headroom costs
+about 8 points of extra reading.
 
 **Why a threshold rather than "read the top N%".** A ranked list cut at a
 fixed percentile is 1–2 points cheaper on this sample and is strictly better
@@ -170,12 +182,12 @@ P(drift) 0.55. The rule wins anyway, on robustness:
 ```
                       RULE conf<0.74        RANKING top 46%
                     read      found       read      found
-  era before 07-09   30%       6/6         46%       6/6
-  era 07-09 onward   65%      19/19        46%      18/19
+  era before 07-09   37%       6/6         47%       6/6
+  era 07-09 onward   60%      19/19        46%      18/19
 ```
 
 Split the sample by era and the judge is markedly less confident on the later
-one (median not-drift confidence 0.85 -> 0.72). **The rule absorbed that and
+one (median not-drift confidence 0.85 -> 0.74). **The rule absorbed that and
 kept full recall by reading more; the percentile held its budget and dropped
 a drift day.** A fixed percentile is a bet that the corpus resembles the
 sample. A threshold makes no such bet — it applies a constant evidentiary bar
@@ -190,12 +202,13 @@ recomputation as the corpus grows.
 would have hidden: if it jumps, something changed about the agents or the
 judge, and that is worth knowing.
 
-**Caveats.** 0.74 was fitted to these 93 rows and two runs; the held-back 60
-is spent, so every cut discussed here is in-sample. The era split is 30/63
-with 6 drift days in the smaller half — the direction is clear, the magnitude
-is not. And averaging two runs per day lifts AUC 0.94 -> 0.95, but that means
-scoring every day twice and doubling Stage 1 cost; the figures in
-`eval/ranking_final.png` assume it.
+**Caveats.** 0.74 is fitted to these 93 rows; the held-back 60 is spent, so
+every cut discussed here is in-sample. The era split is 30/63 with 6 drift
+days in the smaller half — the direction is clear, the magnitude is not.
+
+And the figures above come from **one run**. Two runs per day would give a
+better per-row estimate, but at double Stage 1 cost, and the variance
+measured below says the ordering is the part that reproduces anyway.
 
 ## Design decisions
 
@@ -247,6 +260,31 @@ Database credentials are read from `DATABASE_URI` and must never be committed.
 
 ## Status
 
-Stage 1 is implemented and validated. Not yet built: Stage 2 input assembly
-(`features.cap_bash` exists but the day's turn text is not rendered yet), and the
-judge prompt itself.
+**Stage 1 — implemented and measured.** Current run is `B-peerfix`, 93
+scorable rows of 100, hybrid arm B:
+
+```
+  AUC 0.95     precision 0.86   recall 0.76   F1 0.81   accuracy 0.90
+```
+
+Read AUC, not recall: see the variance note above. The arm bake-off (A/B/C/D)
+is finished and closed — hybrid B won and is the design.
+
+**Stage 2 — code complete, never run.** `audit/stage2.py` assembles the
+window and makes two calls (walk, then explain); `audit/walk.md` and
+`audit/stage2.md` are the prompts. No Stage 2 call has ever been made against
+the API, so every claim about its channel mixture is an argument, not a
+measurement.
+
+**Not yet done, in rough priority order:**
+
+- **Nothing has been scored against the golden set.** 20 hand-labelled
+  episodes exist (`eval/docs/EPISODE_PROTOCOL.md` is their spec). Building
+  them was the expensive part; using them is the point.
+- **The backward walk is unvalidated** and says so in its own prompt file —
+  fitted to a single episode. The mechanical predecessor scored AUC 0.158,
+  which is *inverted*, not weak.
+- `eval/raw/` holds only the 101 sampled days, so Stage 2's unsampled
+  reasoning pull needs raw fetched for flagged days and the day before each.
+- `eval/episodes.py` still groups episodes by `(agent, goal)`, which merges
+  distinct activities. The golden set can now settle that.

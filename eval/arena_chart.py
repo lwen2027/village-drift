@@ -36,6 +36,7 @@ OUT = os.path.join(HERE, "arena_results.svg")
 import sys as _sys
 _sys.path.insert(0, HERE)
 from arena import PRICES  # noqa: E402
+from audit import run as A  # noqa: E402  the one place pricing is defined
 
 # Measured on the 40-row sample. Accuracy is over the 37 DEFINED rows;
 # open-goal rows are scored separately as abstention and excluded here,
@@ -95,11 +96,14 @@ def measured():
 def cost(by_model, judge_calls=0):
     """None if any needed price is missing — better no number than a made-up one.
 
-    Cache reads bill at 0.1x and writes at 1.25x. An earlier version counted
-    both as FREE and then also subtracted the assumed rubric discount, so any
-    arm that genuinely cached was discounted twice: arm D came out at $111
-    against the scorer's $138. Arms B and D carry real cache_read figures;
-    A and C ran before caching engaged and carry none.
+    The multipliers live in A.call_cost, not here. An earlier version of this
+    function counted cache reads and writes as FREE and then also subtracted
+    the assumed rubric discount, so any arm that genuinely cached was
+    discounted twice: arm D came out at $111 against the scorer's $138.
+
+    What stays local is the PROJECTION — the assumed-caching credit below,
+    which is this chart's own modelling and has no place in a function that
+    prices a measured call.
     """
     total = 0.0
     for model, tok in by_model.items():
@@ -113,10 +117,10 @@ def cost(by_model, judge_calls=0):
         if judge_calls and model == "claude-opus-5-5":
             assumed = RUBRIC_TOKENS * judge_calls * 0.9
             tok["in"] = max(0.0, tok["in"] - max(0.0, assumed - tok.get("read", 0)))
-        total += (tok["in"] / 1e6 * p["in"]
-                  + tok["out"] / 1e6 * p["out"]
-                  + tok.get("read", 0) / 1e6 * p["in"] * 0.1
-                  + tok.get("write", 0) / 1e6 * p["in"] * 1.25)
+        total += A.call_cost(
+            {"input_tokens": tok["in"], "output_tokens": tok["out"],
+             "cache_read_input_tokens": tok.get("read", 0),
+             "cache_creation_input_tokens": tok.get("write", 0)}, model)
     return total
 
 

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="660" font-family="Helvetica,Arial,sans-serif" font-size="13">
+<rect width="1000" height="660" fill="#fbfbfa"/>
+<text x="78" y="34" font-size="19" font-weight="600">Stage 1 as a ranked list, not a verdict</text>
+<text x="78" y="55" font-size="12.5" fill="#666">final rubric · 100 agent-days · one run · ordered by the judge’s own P(drift) · 25 drift days · AUC 0.95 (0.91–0.99)</text>
+<text x="78" y="94" font-size="12.5" font-weight="600">what you find as you read down the ranked list</text>
+<line x1="78" y1="410.0" x2="960" y2="410.0" stroke="#ececea"/>
+<text x="68" y="414.0" text-anchor="end" fill="#666" font-size="11.5">0</text>
+<line x1="78" y1="386.0" x2="960" y2="386.0" stroke="#ececea"/>
+<text x="68" y="390.0" text-anchor="end" fill="#666" font-size="11.5">2</text>
+<line x1="78" y1="362.0" x2="960" y2="362.0" stroke="#ececea"/>
+<text x="68" y="366.0" text-anchor="end" fill="#666" font-size="11.5">4</text>
+<line x1="78" y1="338.0" x2="960" y2="338.0" stroke="#ececea"/>
+<text x="68" y="342.0" text-anchor="end" fill="#666" font-size="11.5">6</text>
+<line x1="78" y1="314.0" x2="960" y2="314.0" stroke="#ececea"/>
+<text x="68" y="318.0" text-anchor="end" fill="#666" font-size="11.5">8</text>
+<line x1="78" y1="290.0" x2="960" y2="290.0" stroke="#ececea"/>
+<text x="68" y="294.0" text-anchor="end" fill="#666" font-size="11.5">10</text>
+<line x1="78" y1="266.0" x2="960" y2="266.0" stroke="#ececea"/>
+<text x="68" y="270.0" text-anchor="end" fill="#666" font-size="11.5">12</text>
+<line x1="78" y1="242.0" x2="960" y2="242.0" stroke="#ececea"/>
+<text x="68" y="246.0" text-anchor="end" fill="#666" font-size="11.5">14</text>
+<line x1="78" y1="218.0" x2="960" y2="218.0" stroke="#ececea"/>
+<text x="68" y="222.0" text-anchor="end" fill="#666" font-size="11.5">16</text>
+<line x1="78" y1="194.0" x2="960" y2="194.0" stroke="#ececea"/>
+<text x="68" y="198.0" text-anchor="end" fill="#666" font-size="11.5">18</text>
+<line x1="78" y1="170.0" x2="960" y2="170.0" stroke="#ececea"/>
+<text x="68" y="174.0" text-anchor="end" fill="#666" font-size="11.5">20</text>
+<line x1="78" y1="146.0" x2="960" y2="146.0" stroke="#ececea"/>
+<text x="68" y="150.0" text-anchor="end" fill="#666" font-size="11.5">22</text>
+<line x1="78" y1="122.0" x2="960" y2="122.0" stroke="#ececea"/>
+<text x="68" y="126.0" text-anchor="end" fill="#666" font-size="11.5">24</text>
+<line x1="254.4" y1="110" x2="254.4" y2="410" stroke="#ececea"/>
+<text x="254.4" y="428" text-anchor="middle" fill="#666" font-size="11.5">20%</text>
+<text x="254.4" y="444" text-anchor="middle" fill="#aaa" font-size="10.5">818</text>
+<line x1="430.8" y1="110" x2="430.8" y2="410" stroke="#ececea"/>
+<text x="430.8" y="428" text-anchor="middle" fill="#666" font-size="11.5">40%</text>
+<text x="430.8" y="444" text-anchor="middle" fill="#aaa" font-size="10.5">1,636</text>
+<line x1="607.2" y1="110" x2="607.2" y2="410" stroke="#ececea"/>
+<text x="607.2" y="428" text-anchor="middle" fill="#666" font-size="11.5">60%</text>
+<text x="607.2" y="444" text-anchor="middle" fill="#aaa" font-size="10.5">2,455</text>
+<line x1="783.6" y1="110" x2="783.6" y2="410" stroke="#ececea"/>
+<text x="783.6" y="428" text-anchor="middle" fill="#666" font-size="11.5">80%</text>
+<text x="783.6" y="444" text-anchor="middle" fill="#aaa" font-size="10.5">3,273</text>
+<line x1="960.0" y1="110" x2="960.0" y2="410" stroke="#ececea"/>
+<text x="960.0" y="428" text-anchor="middle" fill="#666" font-size="11.5">100%</text>
+<text x="960.0" y="444" text-anchor="middle" fill="#aaa" font-size="10.5">4,091</text>
+<text x="519" y="466" text-anchor="middle" fill="#333">share of the corpus read, in rank order (and agent-days at 4,091)</text>
+<text transform="translate(24,260) rotate(-90)" text-anchor="middle" fill="#333">drift days found</text>
+<polyline points="78.0,410.0 87.5,398.0 97.0,386.0 106.5,374.0 115.9,362.0 125.4,362.0 134.9,350.0 144.4,338.0 153.9,326.0 163.4,314.0 172.8,302.0 182.3,302.0 191.8,290.0 201.3,278.0 210.8,266.0 220.3,266.0 229.7,254.0 239.2,242.0 248.7,230.0 258.2,218.0 267.7,206.0 277.2,194.0 286.6,182.0 296.1,170.0 305.6,170.0 315.1,170.0 324.6,158.0 334.1,146.0 343.5,146.0 353.0,146.0 362.5,146.0 372.0,146.0 381.5,134.0 391.0,134.0 400.5,134.0 409.9,134.0 419.4,122.0 428.9,122.0 438.4,122.0 447.9,110.0 457.4,110.0 466.8,110.0 476.3,110.0 485.8,110.0 495.3,110.0 504.8,110.0 514.3,110.0 523.7,110.0 533.2,110.0 542.7,110.0 552.2,110.0 561.7,110.0 571.2,110.0 580.6,110.0 590.1,110.0 599.6,110.0 609.1,110.0 618.6,110.0 628.1,110.0 637.5,110.0 647.0,110.0 656.5,110.0 666.0,110.0 675.5,110.0 685.0,110.0 694.5,110.0 703.9,110.0 713.4,110.0 722.9,110.0 732.4,110.0 741.9,110.0 751.4,110.0 760.8,110.0 770.3,110.0 779.8,110.0 789.3,110.0 798.8,110.0 808.3,110.0 817.7,110.0 827.2,110.0 836.7,110.0 846.2,110.0 855.7,110.0 865.2,110.0 874.6,110.0 884.1,110.0 893.6,110.0 903.1,110.0 912.6,110.0 922.1,110.0 931.5,110.0 941.0,110.0 950.5,110.0 960.0,110.0" fill="none" stroke="#b03030" stroke-width="2.4"/>
+<polyline points="78,410 315.1,110 960,110" fill="none" stroke="#1a7f5a" stroke-width="1.3" stroke-dasharray="5 4" opacity="0.75"/>
+<text x="960.0" y="106" text-anchor="end" font-size="11.5" fill="#1a7f5a">perfect ordering (AUC 1.00)</text>
+<line x1="419.4" y1="110" x2="419.4" y2="410" stroke="#5a6b8c" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="426.4" y="172" font-size="11.5" font-weight="600" fill="#5a6b8c">39% → 24 of 25</text>
+<line x1="447.9" y1="110" x2="447.9" y2="410" stroke="#b03030" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="454.9" y="148" font-size="11.5" font-weight="600" fill="#b03030">42% → all 25</text>
+<text x="78" y="510" font-size="11.5" fill="#555">AUC 0.95 (95% 0.91–0.99) is a pairwise win rate: pick one drift day and one non-drift day, and the drift day ranks</text>
+<text x="78" y="525" font-size="11.5" fill="#555">higher 95% of the time. It scores the ORDER only, which is what a ranked deliverable needs. Run the same rows twice</text>
+<text x="78" y="540" font-size="11.5" fill="#555">and 6 verdicts flip while AUC holds to two decimals — the order reproduces, the labels do not, which is why this is</text>
+<text x="78" y="555" font-size="11.5" fill="#555">a ranked list and not a verdict. The 42% mark is set by the single worst-ranked drift day; resampling puts it</text>
+<text x="78" y="570" font-size="11.5" fill="#555">anywhere from far lower to far higher. With 25 drift days the curve's SHAPE is the finding and every particular cut</text>
+<text x="78" y="585" font-size="11.5" fill="#555">is noise — and the confidence threshold that would pick one was tuned on these same rows, so it is in-sample</text>
+<text x="78" y="600" font-size="11.5" fill="#555">besides. The labelled set is 100 days; 7 of them are open-goal, where drift is undefined by construction, so the</text>
+<text x="78" y="615" font-size="11.5" fill="#555">curve scores the 93 that carry a true/false label.</text>
+</svg>

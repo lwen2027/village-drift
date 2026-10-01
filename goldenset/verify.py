@@ -176,11 +176,13 @@ def record(agent: str, day: str, *, claims, turning_points=(),
     # extract_episodes run. Removed 2026-09-28.
     #
     # Why they belong to Stage 2, kept here because the reasoning is the point:
-    #   * onset is a full timestamp routinely EARLIER than the row — Haiku's is
-    #     2026-07-06 16:06, a day before its sampled day — so recording it on a
-    #     day-scoped row is the exact conflation the two-stage split exists to
-    #     prevent. 23 of the first 50 turning points sat on a different day than
-    #     the row they were attached to.
+    #   * onset is a full timestamp routinely EARLIER than the row — on the one
+    #     case with a worked answer it lands the day BEFORE the sampled day — so
+    #     recording it on a day-scoped row is the exact conflation the two-stage
+    #     split exists to prevent. 23 of the first 50 turning points sat on a
+    #     different day than the row they were attached to.
+    #     (That case, to the second, is in eval/docs/EPISODE_PROTOCOL.md. It is
+    #     not restated here; it was, and the timestamp was wrong.)
     #   * operator_corrections separates "drifted and nobody noticed" from
     #     "drifted, was told plainly, carried on" — a property of the episode,
     #     not of the day.

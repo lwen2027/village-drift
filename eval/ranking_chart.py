@@ -45,14 +45,22 @@ CORPUS = 4091
 # for comparison: they were drawn from runs whose prompts no longer exist in
 # the tree, so re-rendering them would produce figures nothing can reproduce.
 RUNS_SPEC = {
-    "all100": ("B-all100__*.json", "ranking_all100.svg",
-               "every labelled agent-day · one rubric, v2 blocks"),
-    # The same rows run TWICE under the final rubric, averaged per row. Two
-    # repeats is not a sample size -- it is a variance estimate, and the
-    # reason for drawing this one is that the repeats disagree on 6 rows.
-    "final": (["B-final_a__*.json", "B-final_b__*.json"], "ranking_final.svg",
-              "final rubric · mean of two identical runs"),
+    # The current run. One run, not a mean of two: `peerfix` is not a repeat
+    # of `final_a`, it SUPERSEDES it. The two were scored on different input
+    # -- monitor_view was filtering every peer chat message out of the cheap
+    # stage's view, so peer_requests was reachable on 7% of days against 72%
+    # after the fix -- and averaging runs that read different text would
+    # describe neither.
+    "peerfix": ("B-peerfix__*.json", "ranking_final.svg",
+                "final rubric · 100 agent-days · one run"),
 }
+
+# RETIRED SPECS, kept as a record of what the figures used to rest on:
+#   all100  B-all100__*.json
+#   final   B-final_a__*.json + B-final_b__*.json, "mean of two identical runs"
+# all100 and final_b were destroyed by an unquoted shell glob on 2026-10-01
+# and cannot be regenerated -- the judge is sampled, so a re-run is a new
+# measurement, not a recovery. final_a survives but is superseded, above.
 
 
 def ranked(pat):
@@ -64,12 +72,19 @@ def ranked(pat):
     repeats of the same rows is the opposite situation: concatenating would
     enter every row twice and halve the apparent variance for free.
 
-    Averaging is worth doing because the repeats disagree. Measured on
+    Averaging is worth doing because repeats disagree. Measured once, on
     final_a vs final_b: 6 of 93 verdicts flip with an identical prompt, all
-    of them at confidence 0.45-0.60. Confidence itself is stable (median
-    delta 0.02), so the mean of two runs is a better estimate of each row's
-    P(drift) than either run alone -- and the ranking is what this figure
+    of them at confidence 0.45-0.60, while confidence itself is stable
+    (median delta 0.02). So the mean of two runs is a better estimate of each
+    row's P(drift) than either alone -- and the ranking is what this figure
     scores.
+
+    THE AVERAGING PATH IS CURRENTLY UNUSED and kept deliberately. The only
+    live spec passes one pattern, because final_b was destroyed and peerfix
+    supersedes rather than repeats final_a. Keeping the code costs nothing
+    and the alternative -- deleting it, then rediscovering months later that
+    concatenating repeats halves the apparent variance for free -- costs a
+    wrong figure.
     """
     pats = pat if isinstance(pat, list) else [pat]
     gold = {}
@@ -282,6 +297,25 @@ def _wrap(t, n):
 if __name__ == "__main__":
     import sys
     for which in (sys.argv[1:] or list(RUNS_SPEC)):
+        pats = RUNS_SPEC[which][0]
+        pats = [pats] if isinstance(pats, str) else pats
+        found = {p: len(glob.glob(os.path.join(RUNS, p))) for p in pats}
+        # Fail NAMED, not as a ZeroDivisionError three frames deep. The
+        # all100 and final_b runs were destroyed by an unquoted shell glob
+        # on 2026-10-01 and are unrecoverable (the judge is sampled), so
+        # these specs point at nothing and `auc` divided by an empty set.
+        if not any(found.values()):
+            print(f"SKIP {which}: no run files match {pats}. Those runs are "
+                  f"gone; re-run or delete the spec.")
+            continue
+        if len(pats) > 1 and not all(found.values()):
+            missing = [p for p, n in found.items() if not n]
+            # A caption reading "mean of two identical runs" over ONE run is
+            # a false claim about the figure, which is worse than no figure.
+            print(f"SKIP {which}: {missing} missing, so this would caption "
+                  f"{sum(1 for n in found.values() if n)} run(s) as "
+                  f"{RUNS_SPEC[which][2]!r}.")
+            continue
         out = os.path.join(HERE, RUNS_SPEC[which][1])
         open(out, "w").write(svg(which))
         print(f"wrote {out}")
