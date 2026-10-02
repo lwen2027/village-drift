@@ -13,3 +13,7 @@ object, not a patch. You may remove, split, or add episodes.
 Evidence must be copied from the detailed source excerpts. If clipping,
 missing days, or omitted boundary candidates prevent a supported conclusion,
 set `examined` false and name exactly what is missing in `examined_note`.
+
+This is the only expansion. Return `history_request: null`. If the expanded
+evidence is still insufficient, use `examined: false`; do not request another
+walk.

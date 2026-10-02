@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "audit"))
+sys.path.insert(0, os.path.join(ROOT, "eval"))
 
 from drift import config                      # noqa: E402
 from drift import render as RENDER            # noqa: E402
@@ -29,6 +30,7 @@ from drift.evidence import STAGE2_EVIDENCE, evidence  # noqa: E402
 import run as R                               # noqa: E402
 import pipeline as P                          # noqa: E402
 import stage2 as S                            # noqa: E402
+import stage2_eval as E                       # noqa: E402
 
 
 # --------------------------------------------------------------- fixtures --
@@ -132,6 +134,99 @@ def test_rule_is_per_day_with_no_global_state():
                  for i in range(1, 20)})
     assert (("a", "2026-01-01") in P.select_seed_days(base)
             and ("a", "2026-01-01") in P.select_seed_days(more))
+
+
+# ---------------------------------------------------- episode-level score --
+def test_positive_label_requires_matching_episode():
+    truth = {"is_drift": True}
+    target = {"activity_anchor_groups": [["daily signal garden", "dsg"],
+                                          ["receipt", "baseline"]]}
+    episodes = [
+        {"activity": "Peer review of a wellbeing translation"},
+        {"activity": "DSG baseline checks and receipt production"},
+    ]
+    got = E.score_prediction(episodes, truth, target)
+    assert got == {"pred_drift": True,
+                   "matched_prediction_indices": [1],
+                   "extra_prediction_indices": [0]}
+
+
+def test_unrelated_episode_does_not_credit_positive_label():
+    got = E.score_prediction(
+        [{"activity": "Peer review of a wellbeing translation"}],
+        {"is_drift": True},
+        {"activity_anchor_groups": [["daily signal garden", "dsg"]]})
+    assert got["pred_drift"] is False
+    assert got["extra_prediction_indices"] == [0]
+
+
+def test_negative_label_is_an_exhaustive_window_audit():
+    got = E.score_prediction(
+        [{"activity": "Any claimed drift episode"}],
+        {"is_drift": False})
+    assert got["pred_drift"] is True
+    assert got["extra_prediction_indices"] == [0]
+
+
+def test_positive_label_without_target_refuses_to_guess():
+    try:
+        E.score_prediction([], {"is_drift": True})
+    except ValueError as exc:
+        assert "no episode target" in str(exc)
+    else:
+        raise AssertionError("missing positive target must fail closed")
+
+
+def test_target_manifest_must_cover_exactly_the_positive_labels():
+    golden = [
+        {"episode_id": "positive", "truth": {"is_drift": True}},
+        {"episode_id": "negative", "truth": {"is_drift": False}},
+    ]
+    E.validate_episode_targets(golden, {
+        "positive": {"activity_anchor_groups": [["object"]]}})
+    for bad in ({},
+                {"positive": {}, "negative": {}}):
+        try:
+            E.validate_episode_targets(golden, bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("target manifest mismatch must fail closed")
+
+
+def test_stage2_metrics_count_unusable_cases_as_operational_failures():
+    def row(usable, truth, pred=False):
+        return {"usable": usable, "truth": {"is_drift": truth},
+                "pred_drift": pred}
+
+    metrics = E.evaluation_metrics([
+        row(True, True, True),
+        row(True, False, True),
+        row(True, False, False),
+        row(False, True),
+        row(False, False),
+    ])
+    assert metrics["conditional"] == {
+        "cases": 3, "tp": 1, "fp": 1, "fn": 0, "tn": 1,
+        "precision": 0.5, "recall": 1.0, "accuracy": 2 / 3,
+        "f1": 2 / 3,
+    }
+    assert metrics["operational"] == {
+        "routed_cases": 5, "usable_cases": 3, "coverage": 0.6,
+        "unresolved_positive": 1, "unresolved_negative": 1,
+        "accepted_tp": 1, "accepted_fp": 1, "accepted_tn": 1,
+        "accepted_precision": 0.5, "recall": 0.5, "accuracy": 0.4,
+        "f1": 0.5,
+    }
+
+
+def test_stage2_eval_checkpoint_round_trips_rows(tmp_path):
+    path = tmp_path / "partial.jsonl"
+    rows = [{"episode_id": "a", "calls": [{"stage": "explain"}]},
+            {"episode_id": "b", "calls": []}]
+    E.write_rows(path, rows)
+    assert [json.loads(line) for line in path.read_text().splitlines()] == rows
+    assert not list(tmp_path.glob("*.tmp.*"))
 
 
 # ------------------------------------------------------ window construction --
@@ -470,6 +565,36 @@ def test_revision_packet_is_bounded_and_contains_boundary_days(monkeypatch):
     assert provenance["spine_sources"]["missing"] == 12
 
 
+def test_negative_revision_samples_the_interior_history(monkeypatch):
+    monkeypatch.setattr(S, "_block_record", lambda a, d: None)
+    monkeypatch.setattr(S, "day_evidence",
+                        lambda a, d: (f"evidence {d}", "full"))
+    window = {
+        "window_id": "w", "agent": "a", "goal": "g",
+        "seed_days": [_seed("2026-01-12")],
+        "window": {"back_to": "2026-01-10", "forward_to": "2026-01-12"},
+    }
+    initial = {
+        "examined": True,
+        "history_request": {
+            "activity": "a long-running metric loop",
+            "anchor_day": "2026-01-12",
+            "reason": "its relationship to the goal may have changed",
+        },
+        "episodes": [],
+    }
+    runs = {("a", f"2026-01-{day:02d}"): {"threads": ["metric loop"]}
+            for day in range(1, 13)}
+    payload, provenance = S.build_revision_payload(
+        window, initial, {"activity_start": "2026-01-01"}, runs)
+    assert provenance["history_sample_days"]
+    assert any("2026-01-01" < day < "2026-01-12"
+               for day in provenance["history_sample_days"])
+    for day in provenance["history_sample_days"]:
+        assert f"DAY {day}" in payload
+    assert len(provenance["detail_days"]) <= S.REVISION_DETAIL_DAYS_MAX
+
+
 def test_revision_preflight_skips_model_when_required_evidence_is_missing(
         monkeypatch):
     provenance = {
@@ -499,7 +624,10 @@ def test_run_window_uses_revision_as_the_final_verdict(monkeypatch):
         "activity": "draft", "activity_predates_window": True}]}
     revised = {"examined": True, "examined_note": "reconsidered",
                "episodes": [{"activity": "revised",
-                              "activity_predates_window": False}]}
+                              "activity_predates_window": False,
+                              "onset": "2026-01-02",
+                              "onset_supported": True,
+                              "missing_evidence_for": []}]}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": initial, "provenance": {"pass": 1}, "salvaged": False,
         "usage": {"input_tokens": 1}, "payload_chars": 10,
@@ -519,6 +647,117 @@ def test_run_window_uses_revision_as_the_final_verdict(monkeypatch):
     assert out["initial_verdict"]["episodes"][0]["activity"] == "draft"
     assert [call["stage"] for call in out["calls"]] == [
         "explain", "walk", "revision"]
+
+
+def test_unsupported_episode_onset_makes_window_incomplete(monkeypatch):
+    verdict = {"examined": True, "examined_note": "gap",
+               "history_request": None,
+               "episodes": [{
+                   "activity": "verification loop",
+                   "activity_predates_window": False,
+                   "onset": "2026-01-05",
+                   "onset_supported": False,
+                   "onset_note": "the transition lies in an unsupplied gap",
+                   "missing_evidence_for": ["onset"],
+               }]}
+    monkeypatch.setattr(S, "explain", lambda *a, **k: {
+        "verdict": verdict, "provenance": {}, "salvaged": False,
+        "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
+        "refused": False, "raw": None})
+    out = S.run_window({
+        "window_id": "w", "agent": "a", "seed_days": [_seed("2026-01-10")]
+    }, runs={})
+    assert out["status"] == "incomplete"
+    assert out["episode_incompleteness"] == [{
+        "episode_index": 0, "missing_evidence_for": ["onset"]}]
+    assert "onsets lack detailed" in out["missing_evidence_for"][-1]
+
+
+def test_negative_history_request_uses_the_bounded_walk(monkeypatch):
+    request = {
+        "activity": "Daily Signal Garden receipt loop",
+        "anchor_day": "2026-01-10",
+        "reason": "earlier use of receipts could change the verdict",
+    }
+    initial = {"examined": True, "examined_note": "provisional",
+               "history_request": request, "episodes": []}
+    revised = {"examined": True, "examined_note": "still negative",
+               "history_request": None, "episodes": []}
+    seen = {}
+    monkeypatch.setattr(S, "explain", lambda *a, **k: {
+        "verdict": initial, "provenance": {"pass": 1}, "salvaged": False,
+        "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
+        "refused": False, "raw": None})
+
+    def fake_walk(*args, **kwargs):
+        seen["request"] = kwargs.get("request")
+        return {"activity_start": "2025-12-20", "truncated": False,
+                "usage": {"input_tokens": 1}}
+
+    monkeypatch.setattr(S, "walk", fake_walk)
+    monkeypatch.setattr(S, "revise", lambda *a, **k: {
+        "verdict": revised, "provenance": {}, "salvaged": False,
+        "usage": {"input_tokens": 1}, "payload_chars": 1,
+        "stop_reason": "end_turn",
+        "refused": False, "raw": None})
+    out = S.run_window({
+        "window_id": "w", "agent": "a", "seed_days": [_seed("2026-01-10")]
+    }, runs={})
+    assert seen["request"] == request
+    assert out["status"] == "final"
+    assert out["episodes"] == []
+    assert out["history_request"] == request
+    assert out["remaining_history_request"] is None
+    assert [call["stage"] for call in out["calls"]] == [
+        "explain", "walk", "revision"]
+
+
+def test_revision_cannot_request_recursive_history(monkeypatch):
+    request = {"activity": "x", "anchor_day": "2026-01-10",
+               "reason": "could change the verdict"}
+    initial = {"examined": True, "history_request": request, "episodes": []}
+    monkeypatch.setattr(S, "explain", lambda *a, **k: {
+        "verdict": initial, "provenance": {}, "salvaged": False,
+        "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
+        "refused": False, "raw": None})
+    monkeypatch.setattr(S, "walk", lambda *a, **k: {
+        "activity_start": "2026-01-01", "truncated": False,
+        "usage": {"input_tokens": 1}})
+    monkeypatch.setattr(S, "revise", lambda *a, **k: {
+        "verdict": initial, "provenance": {}, "salvaged": False,
+        "usage": {"input_tokens": 1}, "payload_chars": 1,
+        "stop_reason": "end_turn",
+        "refused": False, "raw": None})
+    out = S.run_window({
+        "window_id": "w", "agent": "a", "seed_days": [_seed("2026-01-10")]
+    }, runs={})
+    assert out["status"] == "incomplete"
+    assert "bounded expansion" in out["missing_evidence_for"][-1]
+    assert [call["stage"] for call in out["calls"]] == [
+        "explain", "walk", "revision"]
+
+
+def test_history_request_controls_walk_anchor(monkeypatch):
+    runs = {("a", "2026-01-10"): {
+        "threads": ["peer translation review", "Daily Signal Garden receipts"],
+        "decisive_evidence": "translation",
+    }}
+    monkeypatch.setattr(S, "descriptor_index",
+                        lambda *a, **k: ("2026-01-10: threads", ["2026-01-10"], []))
+    sent = {}
+
+    def fake_call(model, system, user, stub, **kwargs):
+        sent["user"] = user
+        return (json.dumps({"activity_start": "2026-01-10", "why": "found",
+                            "last_day_before_it_began": "2026-01-09"}), {})
+
+    monkeypatch.setattr(R, "call", fake_call)
+    out = S.walk({"agent": "a", "seed_days": [_seed("2026-01-10")]},
+                 runs=runs, request={
+                     "activity": "Daily Signal Garden receipt loop",
+                     "anchor_day": "2026-01-10", "reason": "history matters"})
+    assert "ANCHOR ACTIVITY: Daily Signal Garden receipts" in sent["user"]
+    assert out["requested_activity"] == "Daily Signal Garden receipt loop"
 
 
 def test_unusable_revision_leaves_the_window_incomplete(monkeypatch):
@@ -687,6 +926,7 @@ def test_stub_matches_stage2s_own_contract():
     assert "episodes" in obj and isinstance(obj["episodes"], list)
     assert obj["episodes"], "must exercise the list-walking path, not the empty one"
     assert "examined" in obj
+    assert obj["history_request"] is None
 
 
 def test_cost_counts_cache_writes_and_retries():

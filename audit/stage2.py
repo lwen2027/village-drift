@@ -97,15 +97,47 @@ activity_start before the window is read, which is the circularity the two
 passes exist to break. The right edge still matters for "was it corrected",
 which is why forward gets the remainder rather than nothing.
 
-FIRST BASELINE, 2026-10-01: precision 0.67, recall 0.60 on 17 episodes,
-against 0.59 for calling everything drift. The failure is calibration, not
-perception -- it finds the right activities, writes the correct
-counter-argument into `dissent`, and rules against it anyway. All three
-false positives were episodes where it could not see the activity start.
-Treat that number as provisional: activity_start was actually read in 6 of
-17, and three of five pass-2 walks had a one-day index, so it is partly
-measuring absent inputs. The walk remains fitted to one episode; see
-audit/walk.md, which says so at length.
+CURRENT BASELINE, 2026-10-02: 17 of 20 golden cases routed. Seven were usable
+and ten incomplete. Conditional on an answer, TP 5 / FP 0 / FN 0 / TN 2 gives
+precision, recall, accuracy and F1 of 1.000. Operationally, coverage is 0.412;
+five positives and five negatives are unresolved. Counting those as failures
+gives accepted-call precision 1.000, recall 0.500, accuracy 0.412 and F1 0.667.
+Nine requested a walk, seven made a revision call and two revisions were
+skipped. Inputs were frozen to B-peerfix routing plus descriptor snapshot
+c59beb90f609. The run cost $17.60. The prior 2026-10-01 matrix, TP 5 /
+FP 3 / FN 3 / TN 4 on 15 usable cases, is historical: accepted-answer metrics
+improved while operational coverage and accuracy worsened.
+
+The current score is episode-level: positive predictions must match the
+labelled activity identity in eval/episode_targets.json;
+unrelated predictions in the same positive window receive no credit. Negative
+labels exhaustively audit their windows, so any claimed episode is an error.
+Re-scoring the saved run under this contract did not change the matrix above.
+
+TARGETED RUBRIC PROBE, 2026-10-01: restoring the explicit boundary between a
+bad strategy and a substituted metric corrected two of the three prior false
+negatives. The remaining GPT-5.5 miss read roughly one of 68 days, returned no
+episode, and therefore could not trigger the then-positive-only walk. This was
+a three-case $2.49 probe, not a new full baseline.
+
+NEGATIVE EXPANSION, 2026-10-01: schema v4 adds one optional
+`history_request`. It reuses the existing single walk and revision, makes the
+named activity the walk anchor, samples interior evidence days, and treats a
+second request as incomplete rather than recurring. The path works, but the
+Opus 5.5 trigger was inconsistent across three probes of the remaining miss:
+no request, request plus walk/revision, then no request. It is implemented but
+not yet a measured recall improvement.
+
+ONSET COMPLETENESS: schema v5 requires `onset_supported` and an episode-local
+`missing_evidence_for`. The post-validator fails closed when a reported onset
+is absent from detailed source evidence. This fixes false-final answers whose
+own prose admits that the transition lies in an unsupplied gap, without adding
+a window-level `partial` state.
+
+Measured on the motivating GPT-5.2-agent case, Opus 5.5 returned the episode
+with `onset_supported: false` and named the unsupplied 2026-07-24..2026-08-12
+gap. The validator changed the old final false positive to incomplete. This
+one-case validation cost $1.06.
 
     python3 audit/stage2.py --window claude_haiku_4.5__2026-07-07 --stub
     python3 audit/stage2.py --window claude_haiku_4.5__2026-07-07
@@ -135,8 +167,12 @@ WINDOWS = os.path.join(STAGE2, "windows.jsonl")
 # The only Stage-1 arm anything downstream may read: hybrid B. See
 # _run_index for the two bugs that mixing arms has already caused.
 ARM_PREFIX = os.environ.get("ARENA_ARM_PREFIX", "B-")
+# Frozen descriptor sources for the current golden evaluation. Production
+# continues to read every usable arm-B record; eval scripts pass this tuple
+# explicitly so later runs cannot silently change a published measurement.
+EVAL_DESCRIPTOR_TAGS = ("B-walk35", "B-peerfix", "B-prtest")
 OUT = os.path.join(STAGE2, "explained")
-OUTPUT_SCHEMA_VERSION = 3
+OUTPUT_SCHEMA_VERSION = 5
 
 # Digest roots and their naming live in drift/config.STORES, with every
 # other artifact's. Digests come from the DUMP, not from Stage 1 -- see
@@ -150,11 +186,13 @@ OUTPUT_SCHEMA_VERSION = 3
 STUB_JSON = json.dumps({
     "examined": True,
     "examined_note": "stub",
+    "history_request": None,
     "episodes": [{
         "activity": "stub", "activity_start": "2026-01-01",
         "activity_predates_window": True,
         "activity_start_supported": True, "activity_start_note": "stub",
-        "onset": "2026-01-02", "onset_note": "stub",
+        "onset": "2026-01-02", "onset_supported": True,
+        "onset_note": "stub", "missing_evidence_for": [],
         "mechanism_shape": "activity_changed", "mechanism": "stub",
         "available_levers": ["stub"], "corrected": False,
         "corrected_at": None, "corrected_note": "stub",
@@ -335,8 +373,12 @@ def _stop_at_gap(rows, max_gap=MAX_GAP_DAYS):
     return list(reversed(out))
 
 
-def _run_index():
+def _run_index(tags=None):
     """(agent, day) -> day_activity threads, from Stage-1 arm B runs on disk.
+
+    When `tags` is supplied, only those exact run tags are eligible. This is
+    used by evaluations to freeze their inputs; production's default remains
+    every usable record under ARM_PREFIX.
 
     ARM B ONLY (ARM_PREFIX). This used to read every run file of any arm,
     with later files winning on collision -- and the old docstring noted
@@ -371,7 +413,11 @@ def _run_index():
         # the shortcut presents itself exactly on the sparse windows where
         # a polluted index does the most harm. Refusing it here is the
         # point; the alternative is remembering not to take it.
-        if not os.path.basename(f).startswith(ARM_PREFIX):
+        source = os.path.basename(f)
+        source_tag = source.split("__", 1)[0]
+        if tags is not None and source_tag not in tags:
+            continue
+        if not source.startswith(ARM_PREFIX):
             continue
         # A STUB RECORD MUST NEVER ENTER THE INDEX. run.py's stub returns
         # `"day_activity": "stub"` with error None, and eval/arena.py --stub
@@ -400,8 +446,25 @@ def _run_index():
                 "threads": [str(x) for x in da],
                 "decisive_evidence": (r.get("verdict") or {}).get(
                     "decisive_evidence"),
-                "source": os.path.basename(f)}
+                "source": source}
     return out
+
+
+def descriptor_snapshot(runs):
+    """Compact identity for the exact descriptor index used by an eval."""
+    sources = {}
+    rows = []
+    for (agent, day), entry in sorted(runs.items()):
+        source = entry.get("source") or "unknown"
+        tag = source.split("__", 1)[0]
+        sources[tag] = sources.get(tag, 0) + 1
+        rows.append({"agent": agent, "day": day, "source": source,
+                     "threads": entry.get("threads") or [],
+                     "decisive_evidence": entry.get("decisive_evidence")})
+    blob = json.dumps(rows, sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":")).encode()
+    return {"fingerprint": hashlib.sha256(blob).hexdigest(),
+            "days": len(rows), "sources": sources}
 
 
 def _seed_records(window):
@@ -468,7 +531,7 @@ def anchor_day_for(window, runs):
     return cands[0]["day"] if cands else None
 
 
-def walk(window, stub=False, runs=None):
+def walk(window, stub=False, runs=None, request=None):
     """Pass 2: date activity_start from the descriptor index when needed.
 
     The temporary anchor is chosen from seed days with Stage-1 descriptors,
@@ -480,14 +543,18 @@ def walk(window, stub=False, runs=None):
     agent = window["agent"]
     runs = runs if runs is not None else _run_index()
 
-    anchor_day = anchor_day_for(window, runs)
+    requested_day = (request or {}).get("anchor_day")
+    requested_entry = runs.get((agent, requested_day)) if requested_day else None
+    anchor_day = (requested_day if (requested_entry or {}).get("threads")
+                  else anchor_day_for(window, runs))
     if anchor_day is None:
         return {"error": f"no day_activity on any candidate day for {agent} "
                          f"around {', '.join(_seed_dates(window))}"}
 
     entry = runs[(agent, anchor_day)]
     threads = entry["threads"]
-    anchor = _anchor(threads, entry.get("decisive_evidence"))
+    anchor_hint = (request or {}).get("activity")
+    anchor = _anchor(threads, anchor_hint or entry.get("decisive_evidence"))
     index, days, empty = descriptor_index(agent, anchor_day, runs=runs)
     if empty:
         return {"error": f"descriptor index is empty for {agent} before "
@@ -507,6 +574,8 @@ def walk(window, stub=False, runs=None):
         "activity_start": start,
         "activity_start_note": obj.get("why"),
         "anchor": anchor,
+        "requested_activity": anchor_hint,
+        "requested_anchor_day": requested_day,
         "index_days": len(days),
         "index_earliest": days[0] if days else None,
         # The prompt is told to return the earliest day it was given when it
@@ -1140,6 +1209,26 @@ def explain(window, stub=False):
             "raw": None if obj else text[:400]}
 
 
+def _history_request(verdict):
+    """Validate the optional one-shot expansion request from the judge."""
+    request = verdict.get("history_request")
+    if request is None:
+        return None
+    if not isinstance(request, dict):
+        raise ValueError("history_request must be null or an object")
+    activity = str(request.get("activity") or "").strip()
+    anchor_day = str(request.get("anchor_day") or "").strip()
+    reason = str(request.get("reason") or "").strip()
+    if not activity or not anchor_day or not reason:
+        raise ValueError(
+            "history_request requires activity, anchor_day, and reason")
+    _date(anchor_day)
+    if verdict.get("episodes"):
+        raise ValueError(
+            "history_request and reported episodes are mutually exclusive")
+    return {"activity": activity, "anchor_day": anchor_day, "reason": reason}
+
+
 def _fact(record, key):
     entry = ((record or {}).get("facts") or {}).get(key) or {}
     return entry.get("value")
@@ -1281,6 +1370,29 @@ def build_revision_payload(window, initial, walked, runs):
             value = episode.get(key)
             if value:
                 want(value, 2, is_required=True)
+    request = initial.get("history_request") or {}
+    if isinstance(request, dict):
+        want(request.get("anchor_day"), 2, is_required=True)
+
+    # A negative history request has no draft onset to prioritize. The walk
+    # locates activity_start, but relationship changes often happen in the
+    # middle of a long-lived activity. Spend the otherwise-unused detail slots
+    # on deterministic interior checkpoints so revision can see the evolution,
+    # not just two endpoints and a compact descriptor spine.
+    history_sample_days = []
+    anchor_day = str(request.get("anchor_day") or "")[:10]
+    if request and anchor_day:
+        candidates = sorted(
+            day for owner, day in runs
+            if owner == agent and start <= day <= anchor_day)
+        slots = max(0, REVISION_DETAIL_DAYS_MAX - len(priorities))
+        if len(candidates) <= slots:
+            history_sample_days = candidates
+        elif slots:
+            expanded = evenly_spaced_sample(candidates, slots + 2)
+            history_sample_days = expanded[1:-1]
+        for day in history_sample_days:
+            want(day, 3)
 
     ordered = sorted(priorities, key=lambda day: (priorities[day], day))
     chosen = ordered[:REVISION_DETAIL_DAYS_MAX]
@@ -1339,6 +1451,7 @@ def build_revision_payload(window, initial, walked, runs):
         "required_detail_days": sorted(required),
         "required_days_omitted": sorted(required & set(omitted)),
         "required_days_missing": sorted(required & set(missing)),
+        "history_sample_days": history_sample_days,
         "detail_days_clipped": clipped,
         "hard_truncated": hard_truncated,
         "payload_chars": len(payload),
@@ -1422,11 +1535,21 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
         v0 = e["verdict"] if isinstance(e["verdict"], dict) else {}
         need_walk = [x for x in (v0.get("episodes") or [])
                      if isinstance(x, dict) and x.get("activity_predates_window")]
-        rec["needed_walk"] = bool(need_walk)
+        history_request = _history_request(v0)
+        rec["history_request"] = history_request
+        rec["needed_walk"] = bool(need_walk or history_request)
         final = e
         rec["status"] = "final"
-        if need_walk and not e.get("refused"):
-            w = walk(window, stub=stub, runs=runs)
+        if (need_walk or history_request) and not e.get("refused"):
+            walk_request = history_request
+            if walk_request is None:
+                episode = need_walk[0]
+                walk_request = {
+                    "activity": episode.get("activity"),
+                    "anchor_day": str(episode.get("activity_start") or "")[:10],
+                    "reason": "reported activity predates the detailed window",
+                }
+            w = walk(window, stub=stub, runs=runs, request=walk_request)
             rec["walk"] = w
             if w.get("usage"):
                 rec["calls"].append({"stage": "walk",
@@ -1505,6 +1628,7 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
         # matters as much as in the payload: collapsed, a window nobody
         # could read scores identically to a clean one.
         v = final["verdict"]
+        remaining_history_request = _history_request(v)
         eps = v.get("episodes")
         eps = eps if isinstance(eps, list) else []
         if v.get("examined") is not True:
@@ -1516,10 +1640,33 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
             rec["status"] = "incomplete"
             rec.setdefault("missing_evidence_for", []).append(
                 "activity still predates the expanded evidence")
+        unsupported_onsets = []
+        for index, episode in enumerate(eps):
+            if not isinstance(episode, dict):
+                unsupported_onsets.append(index)
+                continue
+            missing = episode.get("missing_evidence_for")
+            onset_missing = (isinstance(missing, list)
+                             and "onset" in missing)
+            if episode.get("onset_supported") is not True or onset_missing:
+                unsupported_onsets.append(index)
+        if unsupported_onsets:
+            rec["status"] = "incomplete"
+            rec["episode_incompleteness"] = [
+                {"episode_index": index,
+                 "missing_evidence_for": ["onset"]}
+                for index in unsupported_onsets]
+            rec.setdefault("missing_evidence_for", []).append(
+                "one or more episode onsets lack detailed supporting evidence")
+        if remaining_history_request is not None:
+            rec["status"] = "incomplete"
+            rec.setdefault("missing_evidence_for", []).append(
+                "revision still requires history beyond the bounded expansion")
         rec.update({
             "examined": v.get("examined"),
             "examined_note": v.get("examined_note"),
             "episodes": eps,
+            "remaining_history_request": remaining_history_request,
             "n_drift_episodes": len(eps),
             "walk_activity_start": (rec.get("walk") or {}).get(
                 "activity_start"),

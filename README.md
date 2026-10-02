@@ -251,28 +251,62 @@ scorable rows of 100, hybrid arm B:
 Read AUC, not recall: see the variance note above. The arm bake-off (A/B/C/D)
 is finished and closed — hybrid B won and is the design.
 
-**Stage 2 — implemented, first baseline in flight.** It reads a contiguous
+**Stage 2 — implemented, current baseline measured.** It reads a contiguous
 token-bounded window and returns a LIST of drift episodes, because 14 of 20
-measured windows contain more than one activity. Two passes: explain first,
-and the backward walk only for episodes the judge reports as starting before
-its window could reach. Prompts are `audit/stage2.md` and `audit/walk.md`.
+measured windows contain more than one activity. Three passes, the last two
+conditional: explain; a backward walk when an episode predates the readable
+window; then revision against the expanded evidence. Prompts are
+`audit/stage2.md`, `audit/walk.md`, and `audit/stage2_revision.md`.
 
 **The handoff exists** — `audit/pipeline.py` applies the selection rule and
 builds windows. Until 2026-10-01 nothing joined the two stages.
 
+**Current measurement, 2026-10-02.** With Stage-1 routing pinned to
+`B-peerfix` and the frozen 490-day descriptor snapshot (`c59beb90f609…`), 17
+of 20 golden cases route to Stage 2. Seven produced usable final answers and
+ten were explicitly incomplete. Conditional on an answer, TP 5 / FP 0 /
+FN 0 / TN 2 gives precision, recall, accuracy and F1 of 1.000. Operationally,
+coverage is only 0.412; counting unresolved cases as failures gives
+accepted-call precision 1.000, recall 0.500, accuracy 0.412 and F1 0.667. Five
+unresolved cases are positive and five negative. Nine requested a walk, seven
+made a revision call, two revisions were skipped, and the run cost $17.60.
+
+The accepted-answer metrics improved over the 2026-10-01 baseline, but the
+pipeline did not improve operationally: stricter boundary checks increased
+incomplete windows from two to ten. The prior TP 5 / FP 3 / FN 3 / TN 4 on
+15 usable cases is historical rather than directly comparable.
+
+The evaluator now matches positive predictions to human-authored activity
+identity anchors rather than crediting any episode in the same window.
+Negative labels are exhaustive window audits. Re-scoring the saved run under
+that episode-level contract left the TP/FP/FN/TN counts unchanged.
+
+A three-case probe after restoring the explicit metric-substitution rule fixed
+two prior false negatives (Claude Sonnet 4.5 and DeepSeek V4 Pro). GPT-5.5
+remained negative with only about one of 68 days visible, isolating the next
+problem as negative explanations being unable to request a backward walk.
+This probe cost $2.49; the full baseline above has not yet been rerun.
+
+Stage 2 also requires each episode to distinguish a supported onset from a
+date inferred across an evidence gap. Unsupported or omitted onset support is
+recorded by episode index and makes the existing window status incomplete; no
+additional `partial` status has been introduced.
+The motivating GPT-5.2-agent probe now records its onset as unsupported across
+the unsupplied 2026-07-24..2026-08-12 gap and correctly finishes incomplete
+instead of as a final false positive. The validation call cost $1.06.
+
 **Not yet done, in rough priority order:**
 
-- **The first Stage 2 baseline is in**, and it is weak: precision 0.67,
-  recall 0.60 on 17 episodes, against 0.59 for calling everything drift.
-  The failure is calibration, not perception — it finds the right
-  activities, writes the correct counter-argument into `dissent`, and then
-  rules against it. All three false positives were episodes where it could
-  not see the activity's start. `eval/stage2_eval.py` is the harness.
-- **The backward walk has one exact hit and is otherwise unvalidated.** Given
-  the right anchor day it dated an activity start to the day; given the day
-  the sample happened to label, it missed by 21 days because the drifted
-  activity was not among that day's threads. n=1. The mechanical predecessor
-  scored AUC 0.158, which is *inverted*, not weak.
+- Stabilize the uncertain-negative expansion trigger. A structured
+  `history_request` now reuses the one bounded walk and revision, anchors the
+  walk on the named activity, and samples interior evidence days without
+  recursion. In repeated GPT-5.5-agent probes, however, the Claude Opus 5.5
+  judge requested expansion in only one of three runs. An unconditional sparse
+  fallback would also expand three true negatives in this golden set.
+- **The backward walk is useful but not solved.** On ten drift episodes it was
+  exact on 5, within three days on 6, with median absolute error 2 days and
+  maximum error 21 days. It cost $0.14. The mechanical predecessor scored AUC
+  0.158, which is *inverted*, not weak.
 - `eval/raw/` holds only the 101 sampled days, so Stage 2's unsampled
   reasoning pull needs raw fetched for flagged days and the day before each.
 - `eval/episodes.py` and `eval/walk_probe.py` are **deleted** (2026-10-01).

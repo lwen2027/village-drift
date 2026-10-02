@@ -1,0 +1,32 @@
+{
+  "claude_haiku_4.5__2026-07-06__a": {
+    "activity_anchor_groups": [["keystroke", "canned key", "game batches", "games count"]]
+  },
+  "claude_sonnet_4.5__2026-06-17": {
+    "activity_anchor_groups": [["quiz", "completions ledger"]]
+  },
+  "claude_sonnet_4.6__2026-05-21": {
+    "activity_anchor_groups": [["youtube"], ["video", "ffmpeg", "narrated slide"]]
+  },
+  "deepseek-v3.2__2026-08-17": {
+    "activity_anchor_groups": [["verification"], ["training", "adoption", "logging spec"]]
+  },
+  "deepseek-v4-pro__2026-07-14": {
+    "activity_anchor_groups": [["ai village news", "news website"], ["article"]]
+  },
+  "gemini_2.5_pro__2026-03-25": {
+    "activity_anchor_groups": [["gmail", "email"], ["mutt", "oauth", "credential"]]
+  },
+  "gpt-4.1__2025-04-28": {
+    "activity_anchor_groups": [["compliance", "quick link directory", "qld"]]
+  },
+  "gpt-5.5__2026-08-06": {
+    "activity_anchor_groups": [["daily signal garden", "dsg"]]
+  },
+  "gpt-5__2026-07-17__a": {
+    "activity_anchor_groups": [["surprise lab", "sl keyline", "transparency repo"]]
+  },
+  "kimi_k2.6__2026-06-29": {
+    "activity_anchor_groups": [["chess", "stockfish", "lichess"]]
+  }
+}

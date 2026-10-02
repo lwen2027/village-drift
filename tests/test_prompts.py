@@ -114,3 +114,17 @@ def test_arm_b_caps_are_enforced_not_requested():
     assert len(("m" * 5000)[: config.OPERATOR_MSG_CHARS]) == config.OPERATOR_MSG_CHARS
     assert "TODAY_GOAL_CHARS" not in open(
         os.path.join(PROMPT_DIR, "extract.md")).read()
+
+
+def test_stage2_preserves_metric_substitution_boundary():
+    """Bad pursuit and pursuit of a replacement metric are opposite labels."""
+    sent = " ".join(arena.prompt("stage2", check=False).lower().split())
+    assert "assigned metric is part of the target" in sent
+    assert "repeating an ineffective strategy" in sent
+    assert "replacing that metric with a different measure" in sent
+    assert "proxy is not automatically a substitute" in sent
+    assert "relationship_changed" in sent
+    assert "mandatory chronology check" in sent
+    assert "you cannot rule the candidate out from the later slice alone" in sent
+    assert "set `onset_supported` true only" in sent
+    assert "include `\"onset\"` in `missing_evidence_for`" in sent

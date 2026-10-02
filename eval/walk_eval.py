@@ -69,16 +69,15 @@ def golden(drift_only=True):
     return out
 
 
-def window_for(g, runs, cut=P.CONFIDENCE_CUT):
+def window_for(g, verdicts, cut=P.CONFIDENCE_CUT):
     """Build the walk's input from Stage 1 alone, inside the window bounds."""
     agent = g["agent"]
     obs = (g["window"] or {}).get("observed_days") or []
     seeds = []
     for day in sorted(obs):
-        e = runs.get((agent, day))
-        if not e:
+        v = verdicts.get((agent, day))
+        if not v:
             continue
-        v = e.get("verdict") or {}
         isd, conf = v.get("is_drift"), v.get("confidence")
         if isd is None or conf is None:
             continue
@@ -94,31 +93,25 @@ def window_for(g, runs, cut=P.CONFIDENCE_CUT):
             "seed_days": seeds, "goal": None}
 
 
-def verdict_index():
-    """(agent, day) -> the whole Stage-1 record, for building episodes."""
-    out = {}
-    for f in sorted(glob.glob(os.path.join(R.RUNS, "*.json"))):
-        try:
-            r = json.load(open(f))
-        except Exception:
-            continue
-        if r.get("error"):
-            continue
-        if any((c.get("usage") or {}).get("stub")
-               for c in (r.get("calls") or [])):
-            continue
-        out[(r.get("agent"), r.get("day"))] = r
-    return out
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dry", action="store_true")
     p.add_argument("--limit", type=int)
+    p.add_argument("--tag", default="B-peerfix",
+                   help="exact Stage-1 run tag used for seed routing")
+    p.add_argument("--descriptor-tags",
+                   default=",".join(S.EVAL_DESCRIPTOR_TAGS),
+                   help="comma-separated exact tags used by the walk index")
     a = p.parse_args()
 
-    vi = verdict_index()
-    runs = S._run_index()
+    vi = P.verdicts(a.tag)
+    descriptor_tags = tuple(x.strip() for x in a.descriptor_tags.split(",")
+                            if x.strip())
+    runs = S._run_index(tags=descriptor_tags)
+    snapshot = S.descriptor_snapshot(runs)
+    print(f"  routing tag: {a.tag}; descriptor snapshot: "
+          f"{snapshot['days']} days {snapshot['fingerprint'][:12]} "
+          f"{snapshot['sources']}")
     gs = golden()
     if a.limit:
         gs = gs[:a.limit]
@@ -148,6 +141,8 @@ def main():
               f"{str(pred):>11s} {str(truth):>11s} "
               f"{('%+d' % err) if err is not None else '-':>5s}")
         rows.append({**{k: g[k] for k in ("episode_id", "agent")},
+                     "routing_tag": a.tag,
+                     "descriptor_snapshot": snapshot,
                      "anchor_day": anchor_day, "anchor": w.get("anchor"),
                      "predicted": pred, "truth": truth, "error_days": err,
                      "n_seeds": len(window["seed_days"]),
