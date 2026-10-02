@@ -217,3 +217,62 @@ def safe_agent(agent):
     consumer reports the day as having no data.
     """
     return agent.replace("/", "_").replace(" ", "_")
+
+
+# ---------------------------------------------------------------- artifacts --
+# WHERE EVERY PER-AGENT-DAY ARTIFACT LIVES, AND HOW IT IS NAMED.
+#
+# Each store is keyed by the same thing -- one agent, one day -- and until
+# 2026-10-01 each spelled that key differently, with nine hand-built paths
+# across five files:
+#
+#     block    arena_blocks/<agent>__<day>.txt
+#     digest   digests_windows/<day>__<agent>.txt     <- reversed
+#     raw      raw/<day>/<agent>.json                 <- nested
+#
+# THE CONVENTIONS ARE NOT THE BUG. The bug is that callers knew them. Build a
+# path with the wrong one and nothing raises: the file simply is not there,
+# the lookup returns None, and that is byte-for-byte the same answer as the
+# truthful "this agent did not work that day". Every silent-absence bug this
+# project has hit has that shape.
+#
+# So the layouts stay as they are on disk -- renaming ~1,500 files buys
+# tidiness and risks the data -- but exactly one function knows them, and no
+# caller concatenates a path again.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# store -> (roots searched in order, stem template, extension)
+STORES = {
+    "block":    (["eval/tables/stage1/arena_blocks"], "{agent}__{day}", ".txt"),
+    "blockrec": (["eval/tables/stage1/arena_blocks"], "{agent}__{day}", ".json"),
+    "digest":   (["eval/digests_windows", "eval/digests"], "{day}__{agent}",
+                 ".txt"),
+    "raw":      (["eval/raw"], "{day}/{agent}", ".json"),
+}
+
+
+def artifact_path(store, agent, day, root=None):
+    """Where this artifact WOULD live. Does not check existence.
+
+    `root` picks among a store's roots when writing; the default is the
+    first, which is the one a writer should use.
+    """
+    roots, stem, ext = STORES[store]
+    base = root or roots[0]
+    rel = stem.format(agent=safe_agent(agent), day=day) + ext
+    return os.path.join(_ROOT, base, rel)
+
+
+def find_artifact(store, agent, day):
+    """The existing path for this artifact, or None. Searches every root.
+
+    Returning None is a real answer here -- plenty of agent-days genuinely
+    have no digest -- which is exactly why the path must not also be able
+    to be wrong. That is this function's job.
+    """
+    roots, _, _ = STORES[store]
+    for r in roots:
+        p = artifact_path(store, agent, day, root=r)
+        if os.path.exists(p):
+            return p
+    return None

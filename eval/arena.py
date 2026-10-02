@@ -289,7 +289,7 @@ def prep(force=False, rows=None):
     want = {(r["agent"], r["day"]) for r in rows}
     os.makedirs(BLOCKS, exist_ok=True)
     have = {k for k in want
-            if os.path.exists(os.path.join(BLOCKS, f"{_safe(k[0])}__{k[1]}.txt"))}
+            if os.path.exists(A.config.artifact_path("block", k[0], k[1]))}
     if len(have) == len(want) and not force:
         print(f"all {len(want)} blocks cached")
         return
@@ -306,7 +306,7 @@ def prep(force=False, rows=None):
         corpus.append(len(txt))
         k = (rec.get("agent"), rec.get("day"))
         if k in want:
-            stem = os.path.join(BLOCKS, f"{_safe(k[0])}__{k[1]}")
+            stem = A.config.artifact_path("block", k[0], k[1])[:-4]
             with open(stem + ".txt", "w") as fh:
                 fh.write(txt)
             # The structured record too: the hybrid arm renders from it, and

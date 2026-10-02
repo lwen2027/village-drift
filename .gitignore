@@ -35,3 +35,6 @@ __pycache__/
 
 # Local agent harness state (scheduled tasks from /loop) — not project content
 .claude/
+
+# pytest's cache; nothing in it is an input to anything
+.pytest_cache/

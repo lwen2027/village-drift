@@ -95,11 +95,12 @@ def test_outside_the_split_observed_chat_still_wins():
 
 
 def test_goal_override_applies_only_to_rest():
-    base = [{"text": "Reduce global suffering as much as you can!"}]
-    assert R.goal_for("a", "2026-06-18", "best", base) is base
-    assert R.goal_for("a", "2026-06-18", None, base) is base
-    out = R.goal_for("a", "2026-06-18", "rest", base)
-    assert out["text"] == "Beat as many games as you can!"
+    """Retargeted from goal_for(), which returned a shape neither caller
+    could use and survived only because this test referenced it."""
+    assert R.goal_override("2026-06-18", "best") is None
+    assert R.goal_override("2026-06-18", None) is None
+    assert R.goal_override("2026-06-18", "rest")["text"] == \
+        "Beat as many games as you can!"
 
 
 def test_unresolvable_room_only_fails_loudly_when_it_matters():

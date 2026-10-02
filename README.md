@@ -31,17 +31,23 @@ to count, diff or divide.
 ## Pipeline
 
 ```
-STAGE 1  (built)         all agent-days · mechanical features + capped logs
-                         -> a ranked list, and a rule for what reaches Stage 2
-STAGE 2  (written, never run)
-                         episodes only · the days Stage 1 flagged, plus the
-                         span around them  -> when it began, and why
+STAGE 1   unit: the agent-day   "was this day spent on the assigned goal?"
+          every day -> is_drift + confidence, i.e. a RANKED LIST
+HANDOFF   the selection rule (conf<0.74), then window construction
+          audit/pipeline.py
+STAGE 2   unit: the episode     "when did it start, why, what could it have
+          a window -> a LIST of drift episodes    done instead, was it fixed?"
 ```
 
-Stage 1's spec is settled (see "What Stage 1 emits" below). Stage 2 exists as
-`audit/stage2.py` + `audit/stage2.md` and stubs cleanly, but no real run has
-happened and nothing about it is validated. Its golden set is being built
-under `eval/docs/EPISODE_PROTOCOL.md`.
+![The pipeline](eval/pipeline.png)
+
+**📄 The design, in full, is `eval/docs/PIPELINE.md`** — both stages, the
+handoff, the measurements behind each choice, and what was tried and
+rejected. That document is authoritative; this README is an entry point.
+
+A window is not an episode. It is the evidence handed to Stage 2, deliberately
+wider than any single activity, and 14 of 20 measured windows contain more
+than one — which is why Stage 2 returns a list rather than a verdict.
 
 Stage 1 deliberately excludes agent reasoning. Not for cost — for bias. Reasoning
 availability ranges 28–98% by agent, so a reasoning-fed detector would flag agents
@@ -145,16 +151,8 @@ judge into a checklist.
 
 **Stage 1 is not a verdict.** It scores each agent-day and emits `is_drift`
 with a `confidence`, and the binary label is the weaker half of that output.
-Run the same 93 labelled rows twice under an identical prompt and **6 of the
-verdicts flip** — every one of them at confidence 0.45–0.60 — while AUC is
-identical to two decimals. The ordering reproduces; the labels do not. Any
-recall figure quoted from a single run carries roughly ±8 points.
-
-> ⚠ That repeat measurement was taken on `B-final_a` vs `B-final_b`, and
-> `final_b` was destroyed by an unquoted shell glob on 2026-10-01. The
-> finding stands as recorded but **cannot be re-derived from the tree**;
-> re-establishing it means paying for another 100-row run. It is the reason
-> to read AUC rather than recall, so it is worth re-establishing eventually.
+Rerun the same rows and ~6 of 93 verdicts flip, all at confidence 0.45-0.60,
+while AUC holds to two decimals. **Read AUC, not recall.**
 
 **The selection rule.** A day goes to Stage 2 if:
 
@@ -162,53 +160,19 @@ recall figure quoted from a single run carries roughly ±8 points.
 verdict is drift   OR   verdict is not-drift AND confidence < 0.74
 ```
 
-Measured on `B-peerfix` (93 rows, 25 drift): this reads **53%** of agent-days
-and catches **25 of 25**.
+Reads 53% of scored days, catches 25 of 25. Implemented in
+`audit/pipeline.py`, which also builds the windows Stage 2 reads.
 
-0.74 is chosen for margin, not for being the tightest cut that works. The
-lowest-confidence drift day the judge got wrong sits at 0.62, and confidence
-is quantized — the judge emits ~19 distinct values, five of them landing
-exactly on 0.62. A cut just above that would still score 25/25 here while
-separating nothing, and would miss any future drift day scored 0.65, 0.68,
-0.70 or 0.72 — all buckets that are already populated. The headroom costs
-about 8 points of extra reading.
-
-**Why a threshold rather than "read the top N%".** A ranked list cut at a
-fixed percentile is 1–2 points cheaper on this sample and is strictly better
-ordered — the rule promotes every drift verdict above its merit, so a
-drift-at-0.55 is read before a not-drift-at-0.45 even though both carry
-P(drift) 0.55. The rule wins anyway, on robustness:
+Current run `B-peerfix`, 93 scorable rows of 100:
 
 ```
-                      RULE conf<0.74        RANKING top 46%
-                    read      found       read      found
-  era before 07-09   37%       6/6         47%       6/6
-  era 07-09 onward   60%      19/19        46%      18/19
+  AUC 0.95   precision 0.86   recall 0.76   F1 0.81   accuracy 0.90
 ```
 
-Split the sample by era and the judge is markedly less confident on the later
-one (median not-drift confidence 0.85 -> 0.74). **The rule absorbed that and
-kept full recall by reading more; the percentile held its budget and dropped
-a drift day.** A fixed percentile is a bet that the corpus resembles the
-sample. A threshold makes no such bet — it applies a constant evidentiary bar
-and lets the corpus decide the volume.
-
-Its failure mode is also the cheaper one. Over-reading costs Stage 2 money;
-missing an episode costs the episode, silently. And the rule is *streaming* —
-it decides each day as Stage 1 emits it, with no global sort and no
-recomputation as the corpus grows.
-
-**Monitor the realised read share.** It is the diagnostic the percentile
-would have hidden: if it jumps, something changed about the agents or the
-judge, and that is worth knowing.
-
-**Caveats.** 0.74 is fitted to these 93 rows; the held-back 60 is spent, so
-every cut discussed here is in-sample. The era split is 30/63 with 6 drift
-days in the smaller half — the direction is clear, the magnitude is not.
-
-And the figures above come from **one run**. Two runs per day would give a
-better per-row estimate, but at double Stage 1 cost, and the variance
-measured below says the ordering is the part that reproduces anyway.
+**→ `eval/docs/PIPELINE.md` has the rest**: why a threshold beats a fixed
+percentile (the era split), why 0.74 rather than the tightest cut that works,
+the out-of-sample check against the golden set, and the caveats on every
+number above.
 
 ## Design decisions
 
@@ -270,21 +234,32 @@ scorable rows of 100, hybrid arm B:
 Read AUC, not recall: see the variance note above. The arm bake-off (A/B/C/D)
 is finished and closed — hybrid B won and is the design.
 
-**Stage 2 — code complete, never run.** `audit/stage2.py` assembles the
-window and makes two calls (walk, then explain); `audit/walk.md` and
-`audit/stage2.md` are the prompts. No Stage 2 call has ever been made against
-the API, so every claim about its channel mixture is an argument, not a
-measurement.
+**Stage 2 — implemented, first baseline in flight.** It reads a contiguous
+token-bounded window and returns a LIST of drift episodes, because 14 of 20
+measured windows contain more than one activity. Two passes: explain first,
+and the backward walk only for episodes the judge reports as starting before
+its window could reach. Prompts are `audit/stage2.md` and `audit/walk.md`.
+
+**The handoff exists** — `audit/pipeline.py` applies the selection rule and
+builds windows. Until 2026-10-01 nothing joined the two stages.
 
 **Not yet done, in rough priority order:**
 
-- **Nothing has been scored against the golden set.** 20 hand-labelled
-  episodes exist (`eval/docs/EPISODE_PROTOCOL.md` is their spec). Building
-  them was the expensive part; using them is the point.
-- **The backward walk is unvalidated** and says so in its own prompt file —
-  fitted to a single episode. The mechanical predecessor scored AUC 0.158,
-  which is *inverted*, not weak.
+- **The first Stage 2 baseline is in**, and it is weak: precision 0.67,
+  recall 0.60 on 17 episodes, against 0.59 for calling everything drift.
+  The failure is calibration, not perception — it finds the right
+  activities, writes the correct counter-argument into `dissent`, and then
+  rules against it. All three false positives were episodes where it could
+  not see the activity's start. `eval/stage2_eval.py` is the harness.
+- **The backward walk has one exact hit and is otherwise unvalidated.** Given
+  the right anchor day it dated an activity start to the day; given the day
+  the sample happened to label, it missed by 21 days because the drifted
+  activity was not among that day's threads. n=1. The mechanical predecessor
+  scored AUC 0.158, which is *inverted*, not weak.
 - `eval/raw/` holds only the 101 sampled days, so Stage 2's unsampled
   reasoning pull needs raw fetched for flagged days and the day before each.
-- `eval/episodes.py` still groups episodes by `(agent, goal)`, which merges
-  distinct activities. The golden set can now settle that.
+- `eval/episodes.py` and `eval/walk_probe.py` are **deleted** (2026-10-01).
+  Both implemented the mechanical similarity walk — Jaccard over whole-day
+  word bags — which scored AUC 0.158, i.e. inverted. `audit/pipeline.py`
+  builds windows now and the walk is a model call. Git has both files; the
+  finding they produced is in `eval/docs/PIPELINE.md`.

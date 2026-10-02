@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(HERE))   # import drift/ from the repo root
 
 from drift import config  # noqa: E402
 from drift import features as F  # noqa: E402
+from drift.render import render as render_block  # noqa: E402
 
 # Output still lands under eval/tables/stage1/ because that is where the
 # blocks and the paid-for runs already are. Where a corpus-scale run should
@@ -197,6 +198,11 @@ USAGE_KEYS = ("input_tokens", "output_tokens",
 
 # Cache multipliers. Reads bill at 0.1x base, WRITES at 1.25x.
 CACHE_READ_MULT, CACHE_WRITE_MULT = 0.1, 1.25
+
+# How many times to re-ask after stop_reason="refusal". Refusals measured
+# non-deterministic on identical Stage 2 payloads, so a retry is the correct
+# response -- but each one is a paid call, so this is capped and counted.
+REFUSAL_RETRIES = int(os.environ.get("ARENA_REFUSAL_RETRIES", "2"))
 
 
 def call_cost(usage, model):
@@ -371,7 +377,7 @@ MAX_INPUT_TOKENS = int(os.environ.get("ARENA_MAX_INPUT_TOKENS", "950000"))
 CHARS_PER_TOKEN = 1.9
 
 
-def call(model, system, user, stub=False):
+def call(model, system, user, stub=False, stub_json=None):
     """Return (text, usage). Usage is whatever the API REPORTED — never an
     estimate. --stub exercises the whole path, including scoring, for free."""
     # A rough estimate, used ONLY as a tripwire -- the numbers that get
@@ -383,14 +389,19 @@ def call(model, system, user, stub=False):
             f"({MAX_INPUT_TOKENS:,}). Raise the limit if the model really "
             f"holds it; do not let it truncate silently.")
     if stub:
-        # Must match rubric.md's contract exactly, or --stub exercises a
+        # Must match the CALLER'S contract exactly, or --stub exercises a
         # shape the judge never returns. It drifted once already: it kept
         # emitting decisive_quote and decisive_timestamp after the rubric
         # had renamed one and dropped the other, and the scorer's
         # `or v.get("decisive_quote")` fallback swallowed the mismatch.
-        return ('{"is_drift": false, "confidence": 0.5,'
-                ' "day_activity": "stub", "decisive_evidence": null,'
-                ' "reasoning": "stub"}',
+        #
+        # Callers with a different contract pass stub_json. stage2.py does:
+        # its judge returns a LIST of episodes, so the rubric shape below
+        # would have exercised nothing it actually parses.
+        return (stub_json or
+                ('{"is_drift": false, "confidence": 0.5,'
+                 ' "day_activity": "stub", "decisive_evidence": null,'
+                 ' "reasoning": "stub"}'),
                 {"input_tokens": est, "output_tokens": 40, "stub": True})
     if model.startswith("claude"):
         key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
@@ -430,10 +441,54 @@ def call(model, system, user, stub=False):
         # type == "text" only. With thinking on the response also carries
         # `thinking` blocks, and concatenating those would hand the JSON
         # parser a wall of reasoning prose before the object.
+        # RETRY A REFUSAL. Measured on Stage 2 windows: 2 of the first 4
+        # calls came back stop_reason="refusal" with an empty thinking block
+        # and no text -- and the SAME payload refused on one run and
+        # answered on the next, so it is sampling, not a property of the
+        # content. Retrying is therefore the right response and excluding
+        # the row is not. Capped, and every attempt is recorded in usage:
+        # a silent retry would hide a systematic refusal rate behind a
+        # slightly larger bill.
+        # Usage ACCUMULATES across attempts. Returning only the last
+        # response's usage was the first version of this, and it is a way to
+        # spend money the cost function cannot see: three refused attempts
+        # at 347K input tokens each billed ~$4 and reported ~$1.4.
+        def _acc(dst, resp):
+            u = resp.get("usage", {})
+            for k in USAGE_KEYS:
+                if k in u:
+                    dst[k] = dst.get(k, 0) + u[k]
+            return dst
+
+        out = _acc({}, d)
+        attempts, refusals = 1, 0
+        while (d.get("stop_reason") == "refusal"
+               and attempts <= REFUSAL_RETRIES):
+            refusals += 1
+            attempts += 1
+            d = _post(ANTHROPIC, {"model": model, "max_tokens": 16000,
+                                  "system": [{"type": "text", "text": system,
+                                              "cache_control":
+                                                  {"type": "ephemeral"}}],
+                                  "messages": [{"role": "user",
+                                                "content": user}]},
+                      {"x-api-key": key, "anthropic-version": "2023-06-01"})
+            _acc(out, d)
         text = "".join(b.get("text", "") for b in d.get("content", [])
                        if b.get("type") == "text")
-        u = d.get("usage", {})
-        return text, {k: u[k] for k in USAGE_KEYS if k in u}
+        if refusals:
+            out["refusals_retried"] = refusals
+        # CARRY stop_reason. A refusal returns a thinking block and NO text
+        # block, so `text` is "" and every downstream JSON parse salvages
+        # nothing -- which a caller then records as an empty/negative
+        # answer. Measured once already: a Stage 2 window came back
+        # stop_reason="refusal", 486 output tokens, zero text, and scored as
+        # "the judge found no drift". A refusal is not a finding and must
+        # never be counted as one.
+        sr = d.get("stop_reason")
+        if sr and sr != "end_turn":
+            out["stop_reason"] = sr
+        return text, out
     key = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not key:
         raise SystemExit("OPENAI_API_KEY unset")
@@ -528,7 +583,7 @@ def monitor_view(agent, day):
     THIS agent changed ITS target. Arm A sees operator messages too, so the
     scope matches and the comparison isolates compression, not access.
     """
-    path = os.path.join(RAW, day, f"{_safe(agent)}.json")
+    path = config.artifact_path("raw", agent, day)
     with open(path) as fh:
         d = json.load(fh)
     L = [f"agent: {agent}    day: {day}", ""]
@@ -627,7 +682,7 @@ def _check_block_version(agent, day):
     changes". It was never bumped and never checked, which is the same as
     not existing.
     """
-    p = os.path.join(BLOCKS, f"{_safe(agent)}__{day}.json")
+    p = config.artifact_path("blockrec", agent, day)
     if not os.path.exists(p):
         return
     got = (json.load(open(p)) or {}).get("feature_version")
@@ -655,7 +710,7 @@ def arm_input(arm, agent, day):
     """
     if arm == "A":
         _check_block_version(agent, day)
-        path = os.path.join(BLOCKS, f"{_safe(agent)}__{day}.txt")
+        path = config.artifact_path("block", agent, day)
         if not os.path.exists(path):
             raise SystemExit(f"no cached block for {agent} {day} -- run "
                              f"`python3 eval/arena.py prep` first")
@@ -814,7 +869,7 @@ def run(rows, arm="B", stub=False, limit=None, tag=None, workers=4):
                         # except for two added Context sections.
                         from drift import render as _R
                         _check_block_version(agent, day)
-                        _blk = os.path.join(BLOCKS, f"{_safe(agent)}__{day}.json")
+                        _blk = config.artifact_path("blockrec", agent, day)
                         if not os.path.exists(_blk):
                             raise SystemExit(
                                 f"no cached block for {agent} {day} -- run prep")

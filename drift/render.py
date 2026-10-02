@@ -47,7 +47,22 @@ def _fmt(entry: dict) -> str:
     return str(v)
 
 
-def render(record: dict) -> str:
+def render(record: dict, raw: dict | None = None,
+           with_evidence: bool = False) -> str:
+    """The block. With `with_evidence`, the primary-evidence layer is appended.
+
+    ONE ARTIFACT, TWO DEPTHS (LW, 2026-10-01). Stage 1 reads the derived
+    layer; Stage 2 reads the same thing plus bash, chat, memory and
+    reasoning. Before this they were two unrelated documents -- a block and
+    a digest -- rendered by different files from different in-memory shapes,
+    and Stage 2 glued a sliced-off block head to a whole digest to get both.
+    That delivered GOAL, ACTIVITY and MEMORY twice, in two different
+    renderings, in one payload.
+
+    with_evidence=False is byte-identical to the previous render() and is
+    checked against every cached block, because Stage 1's measurement rests
+    on those exact bytes.
+    """
     facts = record.get("facts", {})
     out = [f"agent: {record['agent']}    day: {record['day']}", ""]
 
@@ -156,4 +171,9 @@ def render(record: dict) -> str:
     out.append(f"\nprior_active_days (this agent's own last session goal per day):")
     out.extend(f"  {line}" for line in strip) if strip else out.append("  (none)")
 
-    return "\n".join(out)
+    text = "\n".join(out)
+    if with_evidence and raw is not None:
+        from drift.evidence import evidence
+        text += "\n\n" + evidence(record["agent"], raw,
+                                   standalone=False).rstrip() + "\n"
+    return text

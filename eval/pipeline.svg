@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="800" font-family="Helvetica,Arial,sans-serif" font-size="13">
+<rect width="1180" height="800" fill="#fbfbfa"/>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6b6b66"/></marker></defs>
+<text x="44" y="38" font-size="20" fill="#1a1a1a" font-weight="600" text-anchor="start">Finding goal drift in a long-running agent village</text>
+<text x="44" y="60" font-size="13" fill="#6b6b66" font-weight="400" text-anchor="start">Two stages, two units. Stage 1 ranks days and is tuned to miss nothing; Stage 2 explains episodes and is where precision has to come from.</text>
+<rect x="44" y="92" width="190" height="92" rx="7" fill="#f4f4f1" stroke="#d8d8d4" stroke-width="1.2"/>
+<text x="60" y="116" font-size="11" fill="#6b6b66" font-weight="700" text-anchor="start">THE DUMP</text>
+<text x="60" y="140" font-size="15" fill="#1a1a1a" font-weight="600" text-anchor="start">4,091 agent-days</text>
+<text x="60" y="160" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">42 agents · 15 months</text>
+<rect x="282" y="92" width="300" height="92" rx="7" fill="#ffffff" stroke="#d8d8d4" stroke-width="1.2"/>
+<text x="298" y="116" font-size="11" fill="#b03030" font-weight="700" text-anchor="start">STAGE 1 — unit: the agent-day</text>
+<text x="298" y="138" font-size="13" fill="#1a1a1a" font-weight="400" text-anchor="start">“was this day spent on the goal?”</text>
+<text x="298" y="160" font-size="12" fill="#6b6b66" font-weight="600" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">AUC 0.95   P 0.86   R 0.76</text>
+<line x1="240" y1="138" x2="269.0" y2="138" stroke="#6b6b66" stroke-width="1.6"/><path d="M 276 138 L 269.0 133.8 L 269.0 142.2 z" fill="#6b6b66"/>
+<text x="298" y="210" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">mechanical block  +  2 fields a cheap model reads off the raw day</text>
+<text x="298" y="230" font-size="11" fill="#6b6b66" font-weight="400" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">hybrid ‘arm B’ — the only arm anything downstream may read</text>
+<rect x="628" y="92" width="230" height="92" rx="7" fill="#fff8f5" stroke="#b03030" stroke-width="1.4"/>
+<text x="644" y="116" font-size="11" fill="#b03030" font-weight="700" text-anchor="start">OUTPUT: A RANKED LIST</text>
+<text x="644" y="138" font-size="13" fill="#1a1a1a" font-weight="400" text-anchor="start">is_drift + confidence</text>
+<text x="644" y="160" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">the label is the weaker half</text>
+<line x1="588" y1="138" x2="615.0" y2="138" stroke="#6b6b66" stroke-width="1.6"/><path d="M 622 138 L 615.0 133.8 L 615.0 142.2 z" fill="#6b6b66"/>
+<rect x="892" y="92" width="244" height="92" rx="7" fill="#f4f4f1" stroke="#d8d8d4" stroke-width="1.2"/>
+<text x="908" y="116" font-size="11" fill="#6b6b66" font-weight="700" text-anchor="start">WHY NOT A VERDICT</text>
+<text x="908" y="136" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">rerun the same rows and</text>
+<text x="908" y="152" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">6 of 93 verdicts flip —</text>
+<text x="908" y="168" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">while AUC holds. Read AUC.</text>
+<line x1="44" y1="238" x2="1136" y2="238" stroke="#d8d8d4"/>
+<text x="44" y="262" font-size="11" fill="#5a6b8c" font-weight="700" text-anchor="start">THE HANDOFF</text>
+<text x="148" y="262" font-size="11" fill="#6b6b66" font-weight="400" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">audit/pipeline.py</text>
+<rect x="44" y="278" width="420" height="96" rx="7" fill="#f6f8fb" stroke="#5a6b8c" stroke-width="1.4"/>
+<text x="62" y="302" font-size="12" fill="#5a6b8c" font-weight="700" text-anchor="start">the selection rule</text>
+<text x="62" y="326" font-size="13" fill="#1a1a1a" font-weight="600" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">drift   OR   not-drift AND confidence &lt; 0.74</text>
+<text x="62" y="350" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">sends 53% of days · catches 25 of 25 · streaming, no global sort</text>
+<rect x="500" y="278" width="300" height="96" rx="7" fill="#ffffff" stroke="#d8d8d4" stroke-width="1.2"/>
+<text x="518" y="302" font-size="12" fill="#5a6b8c" font-weight="700" text-anchor="start">window construction</text>
+<text x="518" y="324" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">contiguous, grown BACKWARD from</text>
+<text x="518" y="340" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">the flagged days under a token</text>
+<text x="518" y="356" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">budget — not a day count</text>
+<line x1="470" y1="326" x2="487.0" y2="326" stroke="#5a6b8c" stroke-width="1.6"/><path d="M 494 326 L 487.0 321.8 L 487.0 330.2 z" fill="#5a6b8c"/>
+<rect x="836" y="278" width="300" height="96" rx="7" fill="#fffdf5" stroke="#9a6b1f" stroke-width="1.4"/>
+<text x="854" y="302" font-size="12" fill="#9a6b1f" font-weight="700" text-anchor="start">why a token budget</text>
+<text x="854" y="324" font-size="12" fill="#1a1a1a" font-weight="600" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">3.4K-103K tokens/day</text>
+<text x="854" y="342" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">per-day size varies 30× by agent,</text>
+<text x="854" y="358" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">so “12 days” means nothing</text>
+<line x1="44" y1="398" x2="1136" y2="398" stroke="#d8d8d4"/>
+<text x="44" y="422" font-size="11" fill="#1a7f5a" font-weight="700" text-anchor="start">STAGE 2 — unit: the episode</text>
+<text x="246" y="422" font-size="11" fill="#6b6b66" font-weight="400" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">audit/stage2.py</text>
+<rect x="44" y="438" width="250" height="120" rx="7" fill="#f4faf7" stroke="#1a7f5a" stroke-width="1.4"/>
+<text x="62" y="462" font-size="11" fill="#1a7f5a" font-weight="700" text-anchor="start">INPUT: a window</text>
+<text x="62" y="484" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">digests from the dump,</text>
+<text x="62" y="500" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">+ cross-day stats strip,</text>
+<text x="62" y="516" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">+ unsampled reasoning</text>
+<text x="62" y="540" font-size="12" fill="#1a1a1a" font-weight="600" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">≤ 250K tokens</text>
+<rect x="330" y="438" width="270" height="120" rx="7" fill="#ffffff" stroke="#d8d8d4" stroke-width="1.2"/>
+<text x="348" y="462" font-size="11" fill="#1a7f5a" font-weight="700" text-anchor="start">PASS 1 — explain</text>
+<text x="348" y="486" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">segment the window into</text>
+<text x="348" y="502" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">distinct activities, judge</text>
+<text x="348" y="518" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">each one for drift</text>
+<text x="348" y="542" font-size="11" fill="#6b6b66" font-weight="400" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">answers ~2/3 outright</text>
+<line x1="300" y1="498" x2="317.0" y2="498" stroke="#1a7f5a" stroke-width="1.6"/><path d="M 324 498 L 317.0 493.8 L 317.0 502.2 z" fill="#1a7f5a"/>
+<rect x="636" y="438" width="270" height="120" rx="7" fill="#ffffff" stroke="#6b6b66" stroke-width="1.2"/>
+<text x="654" y="462" font-size="11" fill="#1a7f5a" font-weight="700" text-anchor="start">PASS 2 — the walk</text>
+<text x="654" y="486" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">only when the judge says the</text>
+<text x="654" y="502" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">activity began before its</text>
+<text x="654" y="518" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">window could reach</text>
+<text x="654" y="542" font-size="11" fill="#6b6b66" font-weight="400" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">~45 days back for ~4¢</text>
+<line x1="606" y1="498" x2="623.0" y2="498" stroke="#1a7f5a" stroke-width="1.6" stroke-dasharray="5 4"/><path d="M 630 498 L 623.0 493.8 L 623.0 502.2 z" fill="#1a7f5a"/>
+<rect x="942" y="438" width="194" height="120" rx="7" fill="#f4faf7" stroke="#1a7f5a" stroke-width="1.4"/>
+<text x="960" y="462" font-size="11" fill="#1a7f5a" font-weight="700" text-anchor="start">OUTPUT: A LIST</text>
+<text x="960" y="484" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">drift episodes, each</text>
+<text x="960" y="500" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">with onset, mechanism,</text>
+<text x="960" y="516" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">levers, correction</text>
+<text x="960" y="540" font-size="11" fill="#6b6b66" font-weight="400" text-anchor="start" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">may be empty</text>
+<line x1="912" y1="498" x2="929.0" y2="498" stroke="#1a7f5a" stroke-width="1.6"/><path d="M 936 498 L 929.0 493.8 L 929.0 502.2 z" fill="#1a7f5a"/>
+<line x1="44" y1="598" x2="1136" y2="598" stroke="#d8d8d4"/>
+<text x="44" y="624" font-size="12" fill="#1a1a1a" font-weight="700" text-anchor="start">A window is not an episode.</text>
+<text x="44" y="641" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">It is the evidence, deliberately wider than any one activity — 14 of 20 measured windows hold more than one. Hence a list, not a</text>
+<text x="44" y="658" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">verdict: one activity can be on-goal and then off-goal with nothing about the work changing.</text>
+<text x="44" y="687" font-size="12" fill="#1a1a1a" font-weight="700" text-anchor="start">The ceiling is refusals, not context.</text>
+<text x="44" y="704" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">The same window answered at 245K input tokens and refused at 347K. A refusal returns no text, so it arrives downstream looking like</text>
+<text x="44" y="721" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">“no drift found”. Budget 250K; retry; never score a non-answer as a negative.</text>
+<text x="44" y="750" font-size="12" fill="#1a1a1a" font-weight="700" text-anchor="start">Where it stands.</text>
+<text x="44" y="767" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">Stage 1 is measured. Stage 2's first baseline is P 0.67 / R 0.60 on 17 episodes — barely above the 0.59 you get by calling</text>
+<text x="44" y="784" font-size="12" fill="#6b6b66" font-weight="400" text-anchor="start">everything drift. The failure is calibration, not perception: it finds the right activities and then over-claims.</text>
+</svg>

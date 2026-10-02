@@ -145,15 +145,16 @@ def room_of(agent: str, day: str, observed: dict, prior: dict | None = None):
     return None, "unresolved, and the room changes the goal — read the logs"
 
 
-def goal_for(agent: str, day: str, room: str | None, village_goals_text):
-    """Resolve the goal, overriding village_goals when the agent was in #rest.
+def goal_override(day: str, room: str | None):
+    """The #rest goal override for this day, or None. The POLICY, one place.
 
-    `village_goals_text` is whatever the existing day-based lookup returned —
-    correct for #best and for the single-room eras, wrong for #rest during a
-    divergent week.
+    This replaced goal_for(), which returned the resolved goal TEXT with
+    village_goals as the fallback -- a shape neither caller could use, so
+    both inlined `rest_goal(day) if room == "rest" else None` and built
+    their own differently-shaped records from the raw override. The wrapper
+    was unreachable and only its test kept it alive.
+
+    Returning the raw override is what callers need; the one thing worth
+    centralising is which rooms the override applies to.
     """
-    if room == "rest":
-        g = rest_goal(day)
-        if g:
-            return g
-    return village_goals_text
+    return rest_goal(day) if room == "rest" else None

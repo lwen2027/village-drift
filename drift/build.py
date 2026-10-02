@@ -202,7 +202,7 @@ def build(start: str | None = None, end: str | None = None, verbose=True) -> lis
             room, room_how = R.room_of(name, day, observed, room_prior)
             if room:
                 room_prior[name] = (room, day)
-            override = R.rest_goal(day) if room == "rest" else None
+            override = R.goal_override(day, room)
             if override:
                 goals = [{"text": override["text"], "start": override["start"],
                           "end": override["end"]}]

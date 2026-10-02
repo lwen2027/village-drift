@@ -32,8 +32,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEST = os.path.expanduser("~/village-drift-labels-backup")
 FILES = ("stage1/eval_100.jsonl", "stage1/train_23.jsonl",
          "stage1/verification.jsonl", "stage1/arena_40.jsonl",
-         # The mechanical (agent, goal) grouping. Not ground truth, but it is
-         # the baseline the golden set gets compared against.
+         # The mechanical (agent, goal) grouping. SUPERSEDED by
+         # windows.jsonl, and its builder (eval/episodes.py) was deleted on
+         # 2026-10-01 -- which is precisely why it is still copied here. It
+         # is no longer reproducible from the tree, and this script's whole
+         # rule is "back up what exists in exactly one place".
+         #
+         # windows.jsonl is deliberately NOT here: audit/pipeline.py rebuilds
+         # it from arena_runs/, which IS backed up, so it is reproducible in
+         # a way this file no longer is.
          "stage2/episodes_mechanical.jsonl")
 
 # stage2/labels is the reason this list grew a stage prefix. It holds the 20
