@@ -22,28 +22,48 @@ reader who is not told a channel was sampled will read a gap as a silence.
 from __future__ import annotations
 
 import collections
+from dataclasses import dataclass, replace
 
-BASH_TURNS   = 100   # ditto — p90 was 225 KB of shell log per day
-CMD_CHARS = 160      # enough to see intent and redirect target
-OUT_CHARS = 400      # results, not intent
-CHAT_PEERS   = 40    # peer messages; human/operator msgs are never sampled
-CHAT_CTX_BEFORE = 3  # messages of antecedent kept around each selected one
-CHAT_CTX_AFTER  = 1
-CHAT_CHARS = 400
-MEM_CHARS = 4000     # the last snapshot of the day
-REASON_TURNS = 30    # systematic sample; see note below
-REASON_CHARS = 420   # per turn
+from .compress import clip_head_tail, clip_words, evenly_spaced_sample
 
 
-def _systematic(items: list, n: int) -> list:
-    """Every k-th item. Bounded, reproducible, and embeds no judgement."""
-    if len(items) <= n:
-        return items
-    step = len(items) / n
-    return [items[min(len(items) - 1, int(i * step))] for i in range(n)]
+@dataclass(frozen=True)
+class EvidencePolicy:
+    """Mechanical evidence limits; none of these choices judge relevance."""
+
+    bash_turns: int = 100
+    command_chars: int = 160
+    output_chars: int = 400
+    own_chat: int | None = None
+    peer_chat: int = 40
+    chat_context_before: int = 3
+    chat_context_after: int = 1
+    chat_chars: int = 400
+    memory_chars: int = 4000
+    reasoning_turns: int = 30
+    reasoning_chars: int = 420
+    include_reasoning: bool = True
+
+    def without_reasoning(self):
+        return replace(self, include_reasoning=False)
 
 
-def _addressed_to(text: str, agent: str, roster: set) -> bool:
+# The labelling surface keeps its established, deliberately generous view.
+HUMAN_EVIDENCE = EvidencePolicy()
+
+# Stage 2 receives the Stage-1 projection as well as this evidence layer. Its
+# quotas are tighter so several days fit in one causal read. Selection remains
+# systematic and every omitted count is printed into the payload.
+STAGE2_EVIDENCE = EvidencePolicy(
+    bash_turns=50,
+    own_chat=60,
+    peer_chat=24,
+    chat_context_before=2,
+    reasoning_turns=18,
+)
+
+
+def addressed_to(text: str, agent: str, roster: set) -> bool:
     """Is this human/operator message for THIS agent?
 
     Show it if it names the agent, or names no agent at all (a broadcast like
@@ -55,11 +75,11 @@ def _addressed_to(text: str, agent: str, roster: set) -> bool:
     everyone. A labeller skimming a wall of "repeatedly idling" can easily
     mis-attribute it to the agent whose digest it is.
     """
-    named = {a for a in roster if _names_agent(text, a)}
+    named = {a for a in roster if names_agent(text, a)}
     return not named or agent in named
 
 
-def _names_agent(text: str, agent: str) -> bool:
+def names_agent(text: str, agent: str) -> bool:
     """Does this message name the agent? Word-boundary on BOTH sides.
 
     `@GPT-5` matching inside `@GPT-5.6` silently mis-attributed a nudge count
@@ -89,20 +109,18 @@ def _clip_cmd(s, n):
     wired to anything. This keeps cap_bash's head+tail at the digest's
     tighter budget rather than its 500-char one, so the fix costs no tokens.
     """
-    s = str(s or "")
-    if len(s) <= n:
-        return s
     head, tail = int(n * 0.7), n - int(n * 0.7) - 3
-    return s[:head] + "…[+%dc]…" % (len(s) - head - tail) + s[-tail:]
+    return clip_head_tail(str(s or ""), head, tail,
+                          lambda dropped: f"…[+{dropped}c]…")
 
 
 def _clip(s, n):
-    s = " ".join(str(s or "").split())
-    return s if len(s) <= n else s[:n] + f" …[+{len(s) - n}c]"
+    return clip_words(s, n)
 
 
 def evidence(agent: str, data: dict, roster: set = frozenset(),
-             standalone: bool = True) -> str:
+             standalone: bool = True,
+             policy: EvidencePolicy = HUMAN_EVIDENCE) -> str:
     """BASH, CHAT, MEMORY and REASONING for one agent-day, from the raw record.
 
     `standalone=False` drops the ACTIVITY block and the MEMORY count line,
@@ -126,35 +144,41 @@ def evidence(agent: str, data: dict, roster: set = frozenset(),
         A("")
 
     bash = [t for t in turns if t["kind"] == "bash"]
-    bsamp = _systematic(bash, BASH_TURNS)
+    bsamp = evenly_spaced_sample(bash, policy.bash_turns)
     A(f"## BASH — {len(bash)} commands, showing {len(bsamp)} "
-      f"(every {max(1, len(bash)//max(1,len(bsamp)))}th), {CMD_CHARS} chars each")
+      f"(every {max(1, len(bash)//max(1,len(bsamp)))}th), "
+      f"{policy.command_chars} chars each")
     if len(bsamp) < len(bash):
         A("   (sampled mechanically, NOT by interest — all of it is in eval/raw/)")
     for t in bsamp:
-        A(f"  {str(t['ts'])[11:16]}  {_clip_cmd(t['command'], CMD_CHARS)}")
+        A(f"  {str(t['ts'])[11:16]}  {_clip_cmd(t['command'], policy.command_chars)}")
         if t.get("output") or t.get("error"):
-            A(f"         -> {_clip((t.get('output') or '') + (t.get('error') or ''), OUT_CHARS)}")
+            A(f"         -> {_clip((t.get('output') or '') + (t.get('error') or ''), policy.output_chars)}")
     A("")
 
     # Own messages and operator messages addressed to this agent (or to nobody)
     # are never sampled: an operator instruction is the most common external
     # cause of a day changing direction. Peer messages that name it are sampled.
-    keep = [c for c in data["chat"]
-            if c["own"] or (c["human"] and _addressed_to(c["content"], agent, roster))]
+    own = [c for c in data["chat"] if c["own"]]
+    own_sample = (own if policy.own_chat is None
+                  else evenly_spaced_sample(own, policy.own_chat))
+    operators = [c for c in data["chat"]
+                 if c["human"] and addressed_to(c["content"], agent, roster)]
+    keep = own_sample + operators
     peers = [c for c in data["chat"]
-             if not (c["own"] or c["human"]) and _names_agent(c["content"], agent)]
+             if not (c["own"] or c["human"]) and names_agent(c["content"], agent)]
     # Selecting messages by addressee alone keeps a reply and discards what it
     # replied to, which reads as a non-sequitur: a peer offering "I can take one
     # of the playback checks" is meaningless without the exchange that prompted
     # it. So every selected message drags its immediate antecedent along.
     chron = sorted(data["chat"], key=lambda c: str(c["ts"]))
-    sel = {id(c) for c in keep + _systematic(peers, CHAT_PEERS)}
+    sel = {id(c) for c in keep
+           + evenly_spaced_sample(peers, policy.peer_chat)}
     idx = sorted(i for i, c in enumerate(chron) if id(c) in sel)
     with_ctx: dict = {}
     for i in idx:
-        for j in range(max(0, i - CHAT_CTX_BEFORE),
-                       min(len(chron), i + CHAT_CTX_AFTER + 1)):
+        for j in range(max(0, i - policy.chat_context_before),
+                       min(len(chron), i + policy.chat_context_after + 1)):
             with_ctx.setdefault(j, j in idx or with_ctx.get(j, False))
         with_ctx[i] = True
     shown = [(chron[j], with_ctx[j]) for j in sorted(with_ctx)]
@@ -164,25 +188,52 @@ def evidence(agent: str, data: dict, roster: set = frozenset(),
       f"{sum(1 for _, sel in shown if not sel)} lines of surrounding context")
     A(f"   ({hidden} other messages in the shared room not shown — "
       f"full transcript in eval/raw/)")
+    if len(own_sample) < len(own):
+        A(f"   ({len(own)} messages were sent by this agent; showing "
+          f"{len(own_sample)} selected systematically, not by interest)")
     A(f"   (lines marked · are surrounding context, kept so replies have their "
       f"antecedent)")
     for c, selected in shown:
         arrow = "→" if c["own"] else ("←" if selected else "·")
-        A(f"  {str(c['ts'])[11:16]}  {arrow} {c['speaker']}: {_clip(c['content'], CHAT_CHARS)}")
+        A(f"  {str(c['ts'])[11:16]}  {arrow} {c['speaker']}: "
+          f"{_clip(c['content'], policy.chat_chars)}")
     A("")
 
     A(f"## MEMORY — {len(data['memory'])} snapshots; last one of the day below"
       if standalone else "## MEMORY — last snapshot of the day")
     if data["memory"]:
-        A(_clip(data["memory"][-1]["content"], MEM_CHARS))
+        A(_clip(data["memory"][-1]["content"], policy.memory_chars))
     A("")
 
+    if not policy.include_reasoning:
+        A("## REASONING — omitted here because this day's reasoning is supplied "
+          "once in the dedicated boundary section")
+        return "\n".join(L) + "\n"
+
     r = [t for t in turns if t.get("reasoning")]
-    samp = _systematic(r, REASON_TURNS)
+    samp = evenly_spaced_sample(r, policy.reasoning_turns)
     A(f"## REASONING — recorded for {len(r)} of {len(turns)} turns; "
       f"showing {len(samp)}, every {max(1, len(r)//max(1,len(samp)))}th")
     A("   (availability varies 28–98% by provider; absence is not silence.")
     A("    Sampled mechanically, NOT by interest. All of it is in eval/raw/.)")
     for t in samp:
-        A(f"  {str(t['ts'])[11:16]}  {_clip(t['reasoning'], REASON_CHARS)}")
+        A(f"  {str(t['ts'])[11:16]}  {_clip(t['reasoning'], policy.reasoning_chars)}")
     return "\n".join(L) + "\n"
+
+
+# Compatibility names for callers and tests that inspect the human policy.
+BASH_TURNS = HUMAN_EVIDENCE.bash_turns
+CMD_CHARS = HUMAN_EVIDENCE.command_chars
+OUT_CHARS = HUMAN_EVIDENCE.output_chars
+CHAT_PEERS = HUMAN_EVIDENCE.peer_chat
+CHAT_CTX_BEFORE = HUMAN_EVIDENCE.chat_context_before
+CHAT_CTX_AFTER = HUMAN_EVIDENCE.chat_context_after
+CHAT_CHARS = HUMAN_EVIDENCE.chat_chars
+MEM_CHARS = HUMAN_EVIDENCE.memory_chars
+REASON_TURNS = HUMAN_EVIDENCE.reasoning_turns
+REASON_CHARS = HUMAN_EVIDENCE.reasoning_chars
+
+# Private aliases retained while downstream callers migrate to the public
+# shared primitives.
+_addressed_to = addressed_to
+_names_agent = names_agent

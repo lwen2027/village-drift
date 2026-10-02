@@ -69,11 +69,11 @@ def golden(drift_only=True):
     return out
 
 
-def episode_for(g, runs, cut=P.CONFIDENCE_CUT):
+def window_for(g, runs, cut=P.CONFIDENCE_CUT):
     """Build the walk's input from Stage 1 alone, inside the window bounds."""
     agent = g["agent"]
     obs = (g["window"] or {}).get("observed_days") or []
-    sel, flagged = [], []
+    seeds = []
     for day in sorted(obs):
         e = runs.get((agent, day))
         if not e:
@@ -82,18 +82,16 @@ def episode_for(g, runs, cut=P.CONFIDENCE_CUT):
         isd, conf = v.get("is_drift"), v.get("confidence")
         if isd is None or conf is None:
             continue
-        if isd:
-            flagged.append(day)
-        if isd or float(conf) < cut:
-            sel.append(day)
-    if not sel:
+        verdict = {"is_drift": P._drift_value(isd),
+                   "confidence": float(conf)}
+        if (verdict["is_drift"] is True
+                or (verdict["is_drift"] is False
+                    and verdict["confidence"] < cut)):
+            seeds.append(P.routing_seed(day, verdict))
+    if not seeds:
         return None
-    return {"episode_id": g["episode_id"], "agent": agent,
-            # onset is the earliest FLAGGED day Stage 1 produced -- not the
-            # label's onset. Falls back to the earliest selected day when
-            # Stage 1 flagged nothing in the window.
-            "onset": (flagged or sel)[0],
-            "flagged_days": flagged, "selected_days": sel, "goal": None}
+    return {"window_id": g["episode_id"], "agent": agent,
+            "seed_days": seeds, "goal": None}
 
 
 def verdict_index():
@@ -129,19 +127,19 @@ def main():
     print(f"{'episode':30s} {'anchor day':>11s} {'predicted':>11s} "
           f"{'truth':>11s} {'err':>5s}")
     for g in gs:
-        ep = episode_for(g, vi)
-        if ep is None:
+        window = window_for(g, vi)
+        if window is None:
             print(f"{g['episode_id'][:29]:30s} {'NO STAGE 1 IN WINDOW':>41s}")
             continue
         # S.anchor_day_for, not a local copy. A local copy is how --dry came
         # to report anchors the walk would never have used.
-        anchor_day = S.anchor_day_for(ep, runs)
+        anchor_day = S.anchor_day_for(window, runs)
         if a.dry:
             print(f"{g['episode_id'][:29]:30s} {str(anchor_day):>11s} "
                   f"{'(dry)':>11s} {str(g['truth_activity_start'])[:10]:>11s}")
             continue
 
-        w = S.walk(ep, stub=False, runs=runs)
+        w = S.walk(window, stub=False, runs=runs)
         spend += R.call_cost(w.get("usage"), R.MODELS["judge"]) or 0.0
         pred = w.get("activity_start")
         truth = str(g["truth_activity_start"])[:10] if g["truth_activity_start"] else None
@@ -152,8 +150,9 @@ def main():
         rows.append({**{k: g[k] for k in ("episode_id", "agent")},
                      "anchor_day": anchor_day, "anchor": w.get("anchor"),
                      "predicted": pred, "truth": truth, "error_days": err,
-                     "n_selected": len(ep["selected_days"]),
-                     "n_flagged": len(ep["flagged_days"]),
+                     "n_seeds": len(window["seed_days"]),
+                     "n_positive": sum(s["route"] == "positive"
+                                       for s in window["seed_days"]),
                      "index_days": w.get("index_days"),
                      "index_earliest": w.get("index_earliest"),
                      "note": w.get("activity_start_note"),

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import config
+from .compress import clip_head_tail
 
 # --- null taxonomy -----------------------------------------------------------
 # The three kinds route the judge differently:
@@ -98,11 +99,9 @@ def cap_bash(command: str) -> str:
     """Head+tail: keeps the intent line and the redirect, drops the body."""
     if len(command) <= config.BASH_CAP:
         return command
-    dropped = len(command) - config.BASH_HEAD - config.BASH_TAIL
-    return (
-        command[: config.BASH_HEAD]
-        + f"\n… [{dropped} chars elided] …\n"
-        + command[-config.BASH_TAIL :]
+    return clip_head_tail(
+        command, config.BASH_HEAD, config.BASH_TAIL,
+        lambda dropped: f"\n… [{dropped} chars elided] …\n",
     )
 
 

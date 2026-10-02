@@ -48,7 +48,7 @@ def _fmt(entry: dict) -> str:
 
 
 def render(record: dict, raw: dict | None = None,
-           with_evidence: bool = False) -> str:
+           with_evidence: bool = False, evidence_policy=None) -> str:
     """The block. With `with_evidence`, the primary-evidence layer is appended.
 
     ONE ARTIFACT, TWO DEPTHS (LW, 2026-10-01). Stage 1 reads the derived
@@ -173,7 +173,8 @@ def render(record: dict, raw: dict | None = None,
 
     text = "\n".join(out)
     if with_evidence and raw is not None:
-        from drift.evidence import evidence
+        from drift.evidence import HUMAN_EVIDENCE, evidence
         text += "\n\n" + evidence(record["agent"], raw,
-                                   standalone=False).rstrip() + "\n"
+                                   standalone=False,
+                                   policy=evidence_policy or HUMAN_EVIDENCE).rstrip() + "\n"
     return text

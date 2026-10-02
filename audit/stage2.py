@@ -5,20 +5,22 @@ asks, of a whole episode, "when did this start, why, what could the agent
 have done instead, and was it corrected?" Different unit, different
 evidence, different call.
 
-TWO CALLS, AND THE SPLIT IS NOT A COMPROMISE. The walk reads a cheap index
-over a WIDE window to find a boundary; the explanation reads expensive
-detail over the NARROW window that boundary defines. A single call cannot do
-both, because it would have to use its own intermediate conclusion to decide
-what it should have been given. Merging them means either sending a blind
-fixed window -- $1.32/episode at 45 days, and over 1M tokens at the p90
-length, so it does not run -- or sending a sample chosen without knowing
-what the episode contains.
+THREE PASSES, WITH THE LAST TWO CONDITIONAL. The explanation first reads detailed
+evidence in a contiguous, token-bounded window grown backward from the seed
+days. In most episodes that window already contains the activity start. Only
+when the judge reports that an activity predates the readable window does the
+walk read a cheap descriptor index reaching farther back to date its boundary.
+A bounded revision then reconsiders every field using a compact daily spine
+plus detailed evidence around the discovered start, goal changes and seed days.
 
-    call 1   walk      180-day descriptor index      ~2K tok   ~$0.01
-    call 2   explain   block + evidence, the episode only  ~250K   ~$1.0-1.6
+    pass 1   explain   block + evidence, up to ~250K tok        ~$1.0-1.6
+    pass 2   walk      180-day descriptor index, if needed       ~2K tok
+    pass 3   revise    bounded boundary evidence, if pass 2 ran  <=200K tok
 
-The walk is a one-cent call that routinely saves a dollar. That is the whole
-reason it exists as a separate step.
+The walk's date is a locator, not a correction pasted onto a causal account
+formed without the earlier evidence. The initial explanation is retained for
+provenance, but the revision replaces it as the final result. An unusable or
+truncated expansion leaves the record explicitly incomplete.
 
 WHAT THE EXPLAIN CALL READS. ONE ARTIFACT AT TWO DEPTHS, not two documents
 glued together (LW, 2026-10-01):
@@ -27,8 +29,8 @@ glued together (LW, 2026-10-01):
                                         facts + 7 verbatim context sections
     + the evidence layer                bash, chat, last memory snapshot,
                                         reasoning -- drift/evidence.py
-    + unsampled reasoning               flagged days and the day before each
-    + tool errors                       ~45 tok/day
+    + unsampled reasoning               seed days and the day before each
+    + tool errors                       systematic sample, total disclosed
 
 Stage 1 reads the derived layer alone. Stage 2 reads the same record with
 evidence appended -- render_block(rec, raw, with_evidence=True).
@@ -67,11 +69,13 @@ tokens a day it is 900K across a 17-day window, and at p90 it is over
 context on its own. The digest carries it SAMPLED -- "showing 30, every
 18th", which is a ~5% shot at any specific turn and nowhere near enough for
 an onset asked to the second -- so it is pulled unsampled for the days that
-matter: every flagged day and the day before each one, clipped toward the
+matter: every seed day and the day before each one, clipped toward the
 boundary. See day_reasoning for why the clip direction decides whether the
-Haiku answer survives.
+Haiku answer survives. On those days the ordinary sampled copy is omitted;
+the boundary section is the sole copy.
 
-Errors cost 45 tokens a day and the block reduces them to a count. Rule 2 of
+Errors can dominate a verbose window, and the block reduces them to a count.
+Stage 2 systematically samples at most 100 lines and states the total. Rule 2 of
 the Stage-1 rubric is entirely about scaffolding faults, and "what levers
 were available" turns on what actually failed versus what was never tried.
 They should arguably be in the Stage-1 block too.
@@ -86,9 +90,9 @@ Two of the three were reversed by the switch to digests and nobody updated
 the list; the third went when the evidence layer landed. Kept as a warning:
 a rationale for an exclusion outlives the exclusion.
 
-THE WINDOW is grown contiguously outward from the flagged days under a
+THE WINDOW is grown contiguously outward from the seed days under a
 token budget -- backward first, then forward with what is left. Not
-"activity_start .. last flagged day": nothing reliably computes
+"activity_start .. last seed day": nothing reliably computes
 activity_start before the window is read, which is the circularity the two
 passes exist to break. The right edge still matters for "was it corrected",
 which is why forward gets the remainder rather than nothing.
@@ -103,14 +107,15 @@ Treat that number as provisional: activity_start was actually read in 6 of
 measuring absent inputs. The walk remains fitted to one episode; see
 audit/walk.md, which says so at length.
 
-    python3 audit/stage2.py --episode claude_haiku_4.5__2026-07-07 --stub
-    python3 audit/stage2.py --episode claude_haiku_4.5__2026-07-07
+    python3 audit/stage2.py --window claude_haiku_4.5__2026-07-07 --stub
+    python3 audit/stage2.py --window claude_haiku_4.5__2026-07-07
     python3 audit/stage2.py --all --limit 5
 """
 from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import sys
@@ -120,25 +125,18 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
 import run as R  # noqa: E402  the call machinery, prompt loader, paths
+from drift.compress import evenly_spaced_sample  # noqa: E402
 
 STAGE2 = os.path.join(os.path.dirname(HERE), "eval", "tables", "stage2")
-# episodes_mechanical.jsonl, renamed 2026-10-01. The old name read as
-# "the episodes"; it is the (agent, goal) grouping, which merges
-# distinct activities into one row, and its six walk/candidate columns
-# were a dead method's output and are gone. The hand-labelled golden set
-# will land as episodes_golden.jsonl and should supersede this here.
-# What --all iterates. WINDOWS is what audit/pipeline.py writes and is the
-# live path; episodes_mechanical.jsonl was eval/episodes.py's (agent, goal)
-# grouping, which merged distinct activities into one row. That file is
-# superseded and its builder is deleted (git has it), but a stale copy may
-# still be on disk, so it stays as a named fallback rather than a silent one.
+# What --all iterates. A window is the Stage-2 input unit; episodes are
+# findings produced from it, never input rows relabelled for convenience.
 WINDOWS = os.path.join(STAGE2, "windows.jsonl")
-EPISODES = os.path.join(STAGE2, "episodes_mechanical.jsonl")
 
 # The only Stage-1 arm anything downstream may read: hybrid B. See
 # _run_index for the two bugs that mixing arms has already caused.
 ARM_PREFIX = os.environ.get("ARENA_ARM_PREFIX", "B-")
 OUT = os.path.join(STAGE2, "explained")
+OUTPUT_SCHEMA_VERSION = 3
 
 # Digest roots and their naming live in drift/config.STORES, with every
 # other artifact's. Digests come from the DUMP, not from Stage 1 -- see
@@ -154,6 +152,7 @@ STUB_JSON = json.dumps({
     "examined_note": "stub",
     "episodes": [{
         "activity": "stub", "activity_start": "2026-01-01",
+        "activity_predates_window": True,
         "activity_start_supported": True, "activity_start_note": "stub",
         "onset": "2026-01-02", "onset_note": "stub",
         "mechanism_shape": "activity_changed", "mechanism": "stub",
@@ -161,6 +160,11 @@ STUB_JSON = json.dumps({
         "corrected_at": None, "corrected_note": "stub",
         "evidence": ["stub"], "dissent": "stub",
         "verdict_confidence": 0.5, "confidence": 0.5}]})
+
+_revision_stub = json.loads(STUB_JSON)
+_revision_stub["episodes"][0]["activity_start"] = "2025-12-31"
+_revision_stub["episodes"][0]["activity_predates_window"] = False
+REVISION_STUB_JSON = json.dumps(_revision_stub)
 
 
 # _digest_path() stood here, with DIGEST_DIRS above it: a third copy of
@@ -257,9 +261,23 @@ MIN_REASONING_CHARS = 30_000          # ~7K tokens, per day floor
 # produced the same ~500K mean. Budget in tokens; let the day count fall out.
 MAX_PAYLOAD_TOKENS = 250_000
 CHARS_PER_TOKEN_MEASURED = 2.36      # on these payloads, from API-reported usage
-_PAYLOAD_CHARS = MAX_PAYLOAD_TOKENS * CHARS_PER_TOKEN_MEASURED
+# Budget with the conservative estimator used by --dry, not the more generous
+# mean observed after calls. The system prompt is ~12K chars; the remainder is
+# headroom for rendering markers and tokenisation variance.
+CHARS_PER_TOKEN_BUDGET = 1.9
+EXPLAIN_PAYLOAD_CHARS = 450_000
+_PAYLOAD_CHARS = EXPLAIN_PAYLOAD_CHARS
 REASONING_CHARS_TOTAL = int(_PAYLOAD_CHARS * REASONING_SHARE)
-DIGEST_CHAR_BUDGET = int(_PAYLOAD_CHARS - REASONING_CHARS_TOTAL - 20_000)
+DIGEST_CHAR_BUDGET = int(_PAYLOAD_CHARS - REASONING_CHARS_TOTAL - 45_000)
+ERROR_LINES_MAX = 100
+
+# A revision is the second detailed read after a walk discovers that the
+# initial evidence started too late. Keep it comfortably below the measured
+# refusal region even under the conservative 1.9 chars/token estimator used
+# by --dry. The system prompt and response still need room around this.
+REVISION_PAYLOAD_CHARS = 380_000
+REVISION_DETAIL_DAYS_MAX = 12
+REVISION_DAY_CHARS_MAX = 60_000
 
 
 def _date(s):
@@ -267,7 +285,7 @@ def _date(s):
 
 
 def _shift(s, n):
-    """CALENDAR days, not active days. The day before a flagged day may well
+    """CALENDAR days, not active days. The day before a seed day may well
     be one the agent did not work -- that is a finding, not a reason to skip
     to the last active day and silently mislabel it as adjacent."""
     return (_date(s) + datetime.timedelta(days=n)).isoformat()
@@ -386,79 +404,86 @@ def _run_index():
     return out
 
 
-def anchor_day_for(episode, runs):
+def _seed_records(window):
+    """Validated routing records, sorted by day.
+
+    The metadata is pipeline provenance. Only `_seed_dates` may cross into
+    the explain prompt.
+    """
+    seeds = window.get("seed_days")
+    if not isinstance(seeds, list) or not seeds:
+        raise ValueError("window requires a non-empty seed_days list")
+    out, seen = [], set()
+    for seed in seeds:
+        if not isinstance(seed, dict) or not seed.get("day"):
+            raise ValueError("each seed_days item requires a day")
+        _date(seed["day"])
+        if seed["day"] in seen:
+            raise ValueError(f"duplicate seed day: {seed['day']}")
+        seen.add(seed["day"])
+        verdict = seed.get("stage1_verdict")
+        confidence = seed.get("confidence")
+        if verdict is not True and verdict is not False:
+            raise ValueError("each seed requires a boolean stage1_verdict")
+        if (isinstance(confidence, bool)
+                or not isinstance(confidence, (int, float))
+                or not 0 <= confidence <= 1):
+            raise ValueError("each seed requires confidence in [0, 1]")
+        if seed.get("route") not in {"positive", "low_confidence"}:
+            raise ValueError(f"invalid seed route: {seed.get('route')!r}")
+        expected = "positive" if verdict is True else "low_confidence"
+        if seed["route"] != expected:
+            raise ValueError("seed route contradicts stage1_verdict")
+        out.append(seed)
+    return sorted(out, key=lambda seed: seed["day"])
+
+
+def _seed_dates(window):
+    return sorted({seed["day"] for seed in _seed_records(window)})
+
+
+def anchor_day_for(window, runs):
     """Which day's threads the walk anchors on. None if no day has any.
 
-    Earliest FLAGGED day, then onset, then earliest selected -- restricted
-    to days that actually carry day_activity, since anchoring on a day
-    without it just fails one step later.
+    Prefer an available positive-route seed, then any available seed. This
+    is a local walk choice, not a durable selection anchor in the schema.
 
-    NOT "earliest selected", which was tried and is wrong in the opposite
-    direction to the bug it fixed. The selection rule deliberately sends
-    ~56% of days, so the earliest selected day in a window is usually the
-    window's left edge: ordinary on-goal work unrelated to the drift. On the
-    golden windows it anchored four of ten episodes on a day BEFORE the
-    activity existed. Flagged days are where Stage 1 says drift, so they are
-    where the drifted activity is named.
+    Positive-route seeds remain useful for choosing which Stage-1 descriptor
+    the walk follows, but that routing fact is never presented as evidence
+    to the Stage-2 judge.
 
     A FUNCTION BECAUSE TWO CALLERS NEED IT. eval/walk_eval.py reports the
     anchor before paying for the walk, and when it carried its own copy the
     two silently disagreed -- the eval reported anchors the walk would never
     have used.
     """
-    agent = episode["agent"]
+    agent = window["agent"]
 
     def ok(d):
         return bool(d) and bool((runs.get((agent, d)) or {}).get("threads"))
 
-    flagged = sorted(d for d in (episode.get("flagged_days") or []) if ok(d))
-    onset = episode.get("onset")
-    sel = sorted(d for d in (episode.get("selected_days") or []) if ok(d))
-    cands = flagged or ([onset] if ok(onset) else []) or sel
-    return cands[0] if cands else None
+    available = [s for s in _seed_records(window) if ok(s["day"])]
+    positive = [s for s in available if s["route"] == "positive"]
+    cands = positive or available
+    return cands[0]["day"] if cands else None
 
 
-def walk(episode, stub=False, runs=None):
-    """Call 1: date activity_start from the descriptor index.
+def walk(window, stub=False, runs=None):
+    """Pass 2: date activity_start from the descriptor index when needed.
 
-    The anchor is the onset day's thread that `decisive_evidence` points at.
-    Stage 1 already identifies the drifted-to activity in that field -- on
-    the measured case it is verbatim the marathon line -- so selecting the
-    anchor is string overlap, not another judgement. Falls back to the first
-    thread, which on that same case is also correct, but on n=1 that is luck
-    rather than a rule.
-
-    ANCHOR ON THE EARLIEST SELECTED DAY, NOT ON `onset`. This was the whole
-    bug, and it was recorded here as "a data problem not a code one" --
-    which was true and badly understated, because it silently made the walk
-    date the WRONG ACTIVITY rather than date the right one badly.
-
-    `onset` is the first LABELLED drift day, bounded by what the sample drew.
-    The drifted activity can be finished and replaced by the time that day
-    arrives, so its threads need not contain the activity at all. Measured
-    on the one case with ground truth:
-
-        anchored on the sampled day   -> 21 days late, and the anchor it
-                                         chose was a DIFFERENT activity
-                                         that it then dated correctly
-        anchored on the true onset    -> EXACT
-
-    Both runs were competent. The first had no way to succeed: the anchor
-    set it was given did not contain the activity. So prefer the earliest
-    day the window selected -- in a full-corpus sweep every day is scored,
-    and the earliest selected day is the closest available proxy for where
-    the divergence began. `onset` remains the fallback for episode records
-    that predate windows.
-
-    Still n=1. See audit/walk.md, which says so at length.
+    The temporary anchor is chosen from seed days with Stage-1 descriptors,
+    preferring the positive route. `decisive_evidence` selects the thread on
+    that day by word overlap. This operational choice is recorded in the walk
+    result but is not a field in the window schema and is not shown to the
+    explain judge. Still n=1; see audit/walk.md.
     """
-    agent = episode["agent"]
+    agent = window["agent"]
     runs = runs if runs is not None else _run_index()
 
-    anchor_day = anchor_day_for(episode, runs)
+    anchor_day = anchor_day_for(window, runs)
     if anchor_day is None:
         return {"error": f"no day_activity on any candidate day for {agent} "
-                         f"around {episode.get('onset')}"}
+                         f"around {', '.join(_seed_dates(window))}"}
 
     entry = runs[(agent, anchor_day)]
     threads = entry["threads"]
@@ -471,8 +496,10 @@ def walk(episode, stub=False, runs=None):
     user = (f"ANCHOR DAY: {anchor_day}\n"
             f"ANCHOR ACTIVITY: {anchor}\n\n"
             f"DAILY THREADS:\n{index}")
+    walk_stub = json.dumps({"activity_start": anchor_day, "why": "stub",
+                            "last_day_before_it_began": _shift(anchor_day, -1)})
     text, usage = R.call(R.MODELS["judge"], R.prompt("walk", check=False),
-                         user, stub)
+                         user, stub, stub_json=walk_stub)
     obj, salvaged = R._json(text)
     obj = obj if isinstance(obj, dict) else {}
     start = obj.get("activity_start")
@@ -495,7 +522,7 @@ def walk(episode, stub=False, runs=None):
 
 
 def _anchor(threads, decisive_evidence):
-    """Which of the onset day's threads is the one that drifted.
+    """Which of the seed day's threads should drive the backward walk.
 
     TAKES THE EVIDENCE FROM THE SAME RECORD AS THE THREADS. It used to look
     the evidence up separately via _verdict(), which resolves to a different
@@ -553,9 +580,8 @@ def window_days(agent, lo, hi):
     return out
 
 
-def grow_window(agent, flagged, onset, lo_limit, hi_limit, budget,
-                lookahead=3):
-    """Contiguous days around the flagged span, grown outward until `budget`.
+def grow_window(agent, seeds, lo_limit, hi_limit, budget, lookahead=3):
+    """Contiguous days around the seed span, grown outward until `budget`.
 
     Returns (kept, dropped). CONTIGUOUS IS THE POINT. select_days drops from
     the middle, which is correct when a window is given and must be trimmed
@@ -565,7 +591,7 @@ def grow_window(agent, flagged, onset, lo_limit, hi_limit, budget,
     6 of 17 episodes. A reader cannot date the beginning of something from a
     sample of scattered days.
 
-    So: take the flagged span, add a few days forward to catch a correction,
+    So: take the seed span, add a few days forward to catch a correction,
     then extend BACKWARD one day at a time while the budget allows. Backward
     is where the answer is -- the question is when the activity began, and
     every day spent forward is a day not spent reaching it.
@@ -573,19 +599,19 @@ def grow_window(agent, flagged, onset, lo_limit, hi_limit, budget,
     def size(days):
         return sum(len((day_evidence(agent, d)[0] or "")) for d in days)
 
-    kept = list(window_days(agent, flagged[0], flagged[-1]))
+    kept = list(window_days(agent, seeds[0], seeds[-1]))
     used = size(kept)
 
     # BACKWARD FIRST. The lookahead used to be added before this loop, which
     # spent the budget forward and then had none left to reach back: on one
-    # episode it kept the flagged day plus three days AFTER it and never
+    # episode it kept the seed day plus three days AFTER it and never
     # reached the activity start one day BEFORE it. Every day spent forward
     # is a day not spent reaching the answer, so forward gets the remainder.
     #
     # Stops at the first day that would bust the budget rather than skipping
     # it -- skipping breaks contiguity, and a gap in the middle is what this
     # function exists to avoid.
-    d = _shift(flagged[0], -1)
+    d = _shift(seeds[0], -1)
     while lo_limit and d >= lo_limit:
         txt = day_evidence(agent, d)[0] or ""
         if used + len(txt) > budget:
@@ -595,8 +621,8 @@ def grow_window(agent, flagged, onset, lo_limit, hi_limit, budget,
         d = _shift(d, -1)
 
     # Then forward, for "was it corrected", with whatever is left.
-    d = _shift(flagged[-1], 1)
-    end = min(hi_limit, _shift(flagged[-1], lookahead)) if hi_limit else None
+    d = _shift(seeds[-1], 1)
+    end = min(hi_limit, _shift(seeds[-1], lookahead)) if hi_limit else None
     while end and d <= end:
         txt = day_evidence(agent, d)[0] or ""
         if used + len(txt) > budget:
@@ -609,11 +635,11 @@ def grow_window(agent, flagged, onset, lo_limit, hi_limit, budget,
     return kept, [x for x in full if x not in set(kept)]
 
 
-def _priority(days, flagged, onset):
+def _priority(days, seeds):
     """Rank key per day, lowest = keep first. Shared by the day-count cap and
     the character budget so both drop in the same order."""
     inwin = set(days)
-    anchors = [d for d in days if d in set(flagged) or d == onset]
+    anchors = [d for d in days if d in set(seeds)]
     runups = {d for d in (_shift(a, -1) for a in anchors) if d in inwin}
     edges = {days[0], days[-1]}
     pos = {d: i for i, d in enumerate(anchors)}
@@ -634,12 +660,12 @@ def _priority(days, flagged, onset):
     return rank
 
 
-def fit_budget(resolved, flagged, onset, budget):
+def fit_budget(resolved, seeds, budget):
     """Drop days, lowest priority first, until the rendered text fits `budget`
     characters. Returns (kept_resolved, dropped_days).
 
     STILL NEEDED AFTER grow_window, which is not obvious. grow_window adds
-    the flagged span UNCONDITIONALLY before it starts growing, so a span
+    the seed span UNCONDITIONALLY before it starts growing, so a span
     that is over budget on its own never enters the loop and comes back
     over. This is the only thing that trims it: measured, it drops 69 days
     across the 20 golden windows that grow_window had already "bounded".
@@ -654,7 +680,7 @@ def fit_budget(resolved, flagged, onset, budget):
     days = [d for d, _, _ in resolved]
     if not days:
         return resolved, []
-    rank = _priority(days, flagged, onset)
+    rank = _priority(days, seeds)
     total = sum(len(t or "") for _, t, _ in resolved)
     drop, order = set(), sorted(days, key=rank, reverse=True)
     for d in order:
@@ -692,7 +718,7 @@ def cached_digest(agent, day):
 # render_block(rec, raw, with_evidence=True). See day_evidence.
 
 
-def day_evidence(agent, day):
+def day_evidence(agent, day, include_reasoning=True):
     """(text, source) for one day. source is one of:
 
         full           the block plus the evidence layer -- the intended case
@@ -712,7 +738,11 @@ def day_evidence(agent, day):
     """
     rec, raw = _block_record(agent, day), _raw(agent, day)
     if rec and raw:
-        return R.render_block(rec, raw, with_evidence=True), "full"
+        from drift.evidence import STAGE2_EVIDENCE
+        policy = (STAGE2_EVIDENCE if include_reasoning
+                  else STAGE2_EVIDENCE.without_reasoning())
+        return R.render_block(rec, raw, with_evidence=True,
+                              evidence_policy=policy), "full"
     if rec:
         return (R.render_block(rec) + "\n\n[NO RAW CAPTURE FOR THIS DAY. "
                 "What you have above is the derived layer only -- no "
@@ -748,8 +778,101 @@ def _raw(agent, day):
         return None
 
 
+def _artifact_signature(store, agent, day):
+    """Availability and file state for a local evidence artifact."""
+    path = R.config.find_artifact(store, agent, day)
+    if not path:
+        return None
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return [stat.st_size, stat.st_mtime_ns]
+
+
+def input_fingerprint(window, runs=None):
+    """Fingerprint the inputs and evidence coverage that can affect a window.
+
+    Returns (digest, summary). File size and nanosecond mtime make rebuilt
+    artifacts invalidate the local resume cache without hashing multi-megabyte
+    raw days on every startup.
+    """
+    runs = runs if runs is not None else _run_index()
+    agent = window["agent"]
+    seeds = _seed_dates(window)
+    win = window.get("window") or window
+    hi = win.get("forward_to") or seeds[-1]
+    walk_lo = (_date(seeds[0])
+               - datetime.timedelta(days=int(WALK_LOOKBACK / 0.75))).isoformat()
+    lo = min(win.get("back_to") or seeds[0], walk_lo)
+
+    descriptors = []
+    for (owner, day), entry in sorted(runs.items()):
+        if owner != agent or not (lo <= day <= seeds[-1]):
+            continue
+        descriptors.append({
+            "day": day,
+            "threads": entry.get("threads") or [],
+            "decisive_evidence": entry.get("decisive_evidence"),
+            "source": entry.get("source"),
+        })
+
+    artifacts = []
+    source_counts = {"blockrec": 0, "raw": 0, "digest": 0}
+    for day in window_days(agent, lo, hi):
+        signatures = {
+            store: _artifact_signature(store, agent, day)
+            for store in source_counts
+        }
+        for store, signature in signatures.items():
+            source_counts[store] += signature is not None
+        if any(signature is not None for signature in signatures.values()):
+            artifacts.append({"day": day, **signatures})
+
+    prompts = {
+        name: hashlib.sha256(R.prompt(name, check=False).encode()).hexdigest()
+        for name in ("stage2", "walk", "stage2_revision")
+    }
+    material = {
+        "fingerprint_version": 1,
+        "schema_version": OUTPUT_SCHEMA_VERSION,
+        "model": R.MODELS.get("judge"),
+        "prompts": prompts,
+        "limits": {
+            "walk_lookback": WALK_LOOKBACK,
+            "max_gap_days": MAX_GAP_DAYS,
+            "explain_payload_chars": EXPLAIN_PAYLOAD_CHARS,
+            "revision_payload_chars": REVISION_PAYLOAD_CHARS,
+            "revision_detail_days": REVISION_DETAIL_DAYS_MAX,
+        },
+        "window": {
+            "window_id": window.get("window_id"),
+            "agent": agent,
+            "goal": window.get("goal"),
+            "back_to": win.get("back_to"),
+            "forward_to": win.get("forward_to"),
+            "seed_days": _seed_records(window),
+        },
+        "coverage_range": [lo, hi],
+        "descriptors": descriptors,
+        "artifacts": artifacts,
+    }
+    encoded = json.dumps(material, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), default=str).encode()
+    digest = hashlib.sha256(encoded).hexdigest()
+    summary = {
+        "coverage_range": [lo, hi],
+        "descriptor_days": len(descriptors),
+        "descriptor_earliest": descriptors[0]["day"] if descriptors else None,
+        "descriptor_latest": descriptors[-1]["day"] if descriptors else None,
+        "artifact_days": len(artifacts),
+        "artifact_sources": source_counts,
+    }
+    return digest, summary
+
+
 # onset_reasoning() stood here. Once reasoning moved from "the onset day" to
-# "every flagged day and the day before each", it was a one-line forwarder to
+# "every seed day and the day before each", it was a one-line forwarder to
 # day_reasoning() that nothing called. The docstring it carried -- an absent
 # section reads to the model as "the agent reasoned about nothing", so return
 # a stated absence instead -- moved into day_reasoning, which is where the
@@ -768,8 +891,8 @@ def day_reasoning(agent, day, budget, keep):
     the day ran to 19:13. Keeping the tail of an over-budget day discards
     16:04 and retains three hours of consequences.
 
-    So clip toward the boundary. A flagged day gets its HEAD, because the
-    switch happens just after the goal lands. The day BEFORE a flagged day
+    So clip toward the boundary. A seed day gets its HEAD, because the
+    switch may happen near its start. The day BEFORE a seed day
     gets its TAIL, because what matters there is the run-up.
     """
     d = _raw(agent, day)
@@ -807,58 +930,41 @@ def errors_in(agent, days):
     return out, seen
 
 
-def build_payload(episode, activity_start):
+def build_payload(window):
     """Assemble the explain call's input. Returns (text, provenance)."""
-    agent = episode["agent"]
-    flagged = sorted(episode.get("flagged_days") or [episode["onset"]])
+    agent = window["agent"]
+    seeds = _seed_dates(window)
     # An explicit window overrides the derived one. eval/stage2_eval.py uses
     # this to feed the golden set's own windows, which isolates the explain
     # call from the walk -- otherwise a bad window and a bad judgement are
     # indistinguishable in the score.
-    win = episode.get("window") or {}
-    lo = win.get("back_to") or activity_start or episode["onset"]
-    hi = win.get("forward_to") or max(flagged[-1], episode["onset"])
-    # CLAMP TO THE ONSET, NOT JUST TO hi. Guarding only `lo > hi` catches an
-    # activity_start past the LAST flagged day but not one past the onset,
-    # and the walk prompt is unvalidated by this module's own admission. With
-    # activity_start=2026-08-10 on an episode whose onset is 07-17, the onset
-    # day and the first flagged day both vanished from the evidence, the
-    # header told the judge the activity "predates the onset by -24 days",
-    # and the dropped days never reached the gap section -- missing/elided
-    # only cover days INSIDE the span.
-    clamped = None
-    if _date(lo) > _date(episode["onset"]):
-        clamped = lo
-        lo = episode["onset"]
-    if _date(lo) > _date(hi):
-        clamped = clamped or lo
-        lo = episode["onset"]
-    # Grow a CONTIGUOUS window outward from the flagged days under the token
+    win = window.get("window") or window
+    lo = win.get("back_to") or seeds[0]
+    hi = win.get("forward_to") or seeds[-1]
+    if _date(lo) > _date(seeds[0]) or _date(hi) < _date(seeds[-1]):
+        raise ValueError("window bounds must contain every seed day")
+    # Grow a CONTIGUOUS window outward from the selected seed days under the token
     # budget, rather than trimming a given span from the middle. lo/hi are
     # limits on how far growth may reach, not the set to be read.
     span = window_days(agent, lo, hi)
-    days, elided = grow_window(agent, flagged, episode["onset"], lo, hi,
-                               DIGEST_CHAR_BUDGET)
+    days, elided = grow_window(agent, seeds, lo, hi, DIGEST_CHAR_BUDGET)
 
-    # Reasoning on every flagged day AND the day before each one. The single
-    # recorded onset is the first LABELLED day, which is sample-bounded and
-    # systematically LATER than the true onset, so pulling only that day
-    # aims the most on-point channel at the wrong date. The day before is
-    # where a reversal that reads as "already drifting" on the flagged day
-    # is still visible as a decision.
+    # Reasoning on every seed day AND the day before each one. The seed is a
+    # routing observation, not an onset label; its run-up is where the switch
+    # may still be visible as a decision.
     # Preference order matters more than it looks. Sorting by date and
     # slicing kept the four EARLIEST candidates, which on gpt-5__2026-07-17
     # spent two of four slots on run-up days that have no raw capture at all
-    # (eval/raw holds only sampled days), dropped 08-27 -- the last flagged
+    # (eval/raw holds only sampled days), dropped 08-27 -- the last seed
     # day, which DOES have data -- and then halved the per-day budget by
     # counting the two empties in len(want). Q4 "was it corrected" is
     # answered at the end of the episode, so that is precisely the wrong cut.
     #
-    # So: days that actually resolve first, flagged days before run-ups, and
+    # So: days that actually resolve first, seed days before run-ups, and
     # outermost-first within each group so both ends of the episode survive.
-    cand = sorted({d for f in list(flagged) + [episode["onset"]]
-                   for d in (f, _shift(f, -1))} & set(days))
-    anch = [d for d in cand if d in flagged or d == episode["onset"]]
+    cand = sorted({d for seed in seeds
+                   for d in (seed, _shift(seed, -1))} & set(days))
+    anch = [d for d in cand if d in seeds]
     apos = {d: i for i, d in enumerate(anch)}
 
     def _pref(d):
@@ -875,53 +981,58 @@ def build_payload(episode, activity_start):
                   REASONING_CHARS_TOTAL // max(1, len(want))))
     reasons, reasoning_days = [], []
     for dd in want:
-        keep = "head" if dd in flagged or dd == episode["onset"] else "tail"
+        keep = "head" if dd in seeds else "tail"
         txt, note = day_reasoning(agent, dd, per, keep)
         if txt:
             reasoning_days.append(dd)
         reasons.append((dd, keep, txt, note))
     reasoning = any(t for _, _, t, _ in reasons)
     reason_note = "; ".join(f"{dd}: {n}" for dd, _, _, n in reasons if n) or None
-    errs, err_days = errors_in(agent, days)
+    all_errs, err_days = errors_in(agent, days)
+    errs = evenly_spaced_sample(all_errs, ERROR_LINES_MAX)
     # Resolved once, up front, so the header can state what is actually
     # below it rather than asserting a day count nothing checked.
-    resolved = [(d, *day_evidence(agent, d)) for d in days]
-    resolved, overflow = fit_budget(resolved, flagged, episode["onset"],
-                                    DIGEST_CHAR_BUDGET)
+    # Dedicated boundary reasoning above is substantially deeper than the
+    # systematic per-day sample. Do not pay for, or anchor on, both copies.
+    dedicated_reasoning = {d for d, _, txt, _ in reasons if txt}
+    resolved = [(d, *day_evidence(agent, d,
+                                  include_reasoning=d not in dedicated_reasoning))
+                for d in days]
+    # These channels sit outside the rendered days. Reserve their actual size
+    # before fitting days; otherwise a verbose error stream can defeat the
+    # nominal payload ceiling after the day budget has already been applied.
+    channel_chars = (
+        sum(len(txt or "") + len(note or "")
+            for _, _, txt, note in reasons)
+        + sum(len(line) + 1 for line in errs)
+    )
+    day_budget = min(
+        DIGEST_CHAR_BUDGET,
+        max(1, EXPLAIN_PAYLOAD_CHARS - channel_chars - 45_000),
+    )
+    resolved, overflow = fit_budget(resolved, seeds, day_budget)
     days = [d for d, _, _ in resolved]
+    # The first scan sized the budget. This second one makes the rendered
+    # error channel describe only days that actually survived that fit.
+    all_errs, err_days = errors_in(agent, days)
+    errs = evenly_spaced_sample(all_errs, ERROR_LINES_MAX)
     elided = sorted(set(elided) | set(overflow))
     missing_preview = [d for d, _, src in resolved if src == "missing"]
 
-    s = [f"EPISODE  agent: {agent}",
-         f"  assigned goal: {episode.get('goal')}",
-         f"  activity_start: {activity_start or 'UNKNOWN'}"
-         f"   onset: {episode['onset']}",
-         f"  days Stage 1 flagged as drift: {', '.join(flagged)}",
+    s = [f"WINDOW  agent: {agent}",
+         f"  assigned goal: {window.get('goal')}",
+         f"  seed days: {', '.join(seeds)}",
          # NOT "active days". window_days() filters nothing, so this used to
          # assert 14 active days on a payload that carried 2 and then listed
          # the other 21 as not supplied, two sections apart.
          f"  window: {span[0]} .. {span[-1]} ({len(span)} calendar days), "
          f"of which {len(days) - len(missing_preview)} are below",
          ""]
-    if clamped:
-        s.append(f"  NOTE: the walk returned activity_start {clamped}, which "
-                 f"is AFTER the onset. That is a failed walk; the window has "
-                 f"been clamped to the onset and the walk's answer ignored.")
-        s.append("")
-    elif activity_start and activity_start != episode["onset"]:
-        n = (_date(episode["onset"]) - _date(activity_start)).days
-        s.append(f"  NOTE: the activity predates the onset by {n} calendar "
-                 f"days. Those earlier days were not drift — the goal had "
-                 f"not changed yet. That gap is the thing to explain.")
-        s.append("")
-
     for dd, keep, txt, note in reasons:
         s.append("=" * 72)
         s.append(f"AGENT'S OWN REASONING — {dd}"
-                 + ("   <-- ONSET" if dd == episode["onset"] else "")
-                 + ("   <-- flagged" if dd in flagged
-                    and dd != episode["onset"] else "")
-                 + ("   (run-up, day before a flagged day)"
+                 + ("   <-- seed day" if dd in seeds else "")
+                 + ("   (run-up, day before a seed day)"
                     if keep == "tail" else ""))
         s.append("=" * 72)
         if note:
@@ -936,7 +1047,8 @@ def build_payload(episode, activity_start):
     # the judge there were zero tool failures across 23 days on the strength
     # of two observed ones -- and rule 2 is entirely about scaffolding
     # faults, so this is where absence-as-evidence does the most damage.
-    s.append(f"TOOL AND COMMAND ERRORS ({len(errs)}) — from the "
+    s.append(f"TOOL AND COMMAND ERRORS ({len(all_errs)} total, showing "
+             f"{len(errs)}) — from the "
              f"{len(err_days)} of {len(days)} days in this window that have a "
              f"raw capture")
     s.append("=" * 72)
@@ -944,6 +1056,10 @@ def build_payload(episode, activity_start):
         s.append(f"[days searched: {', '.join(err_days)}. The other "
                  f"{len(days) - len(err_days)} were NOT searched for errors; "
                  f"this count says nothing about them.]")
+    if len(errs) < len(all_errs):
+        s.append(f"[{len(all_errs) - len(errs)} error lines omitted; the "
+                 f"{len(errs)} shown were sampled systematically, not by "
+                 "error type or apparent importance.]")
     s.append("\n".join(errs) if errs
              else "[no errors in the days listed above]")
     s.append("")
@@ -955,9 +1071,7 @@ def build_payload(episode, activity_start):
             missing.append(day)
             continue
         s.append("=" * 72)
-        s.append(f"DAY {day}" + ("   <-- ONSET" if day == episode["onset"] else "")
-                 + ("   <-- flagged as drift" if day in flagged
-                    and day != episode["onset"] else "")
+        s.append(f"DAY {day}" + ("   <-- seed day" if day in seeds else "")
                  + ("   [STATISTICS ONLY]" if src == "stats-only" else ""))
         s.append("=" * 72)
         s.append(txt)
@@ -984,9 +1098,7 @@ def build_payload(episode, activity_start):
         s.append("")
 
     prov = {"window_requested": [lo, hi],
-            # A clamp means the walk returned a date later than the onset,
-            # i.e. the walk failed. Silently correcting it would hide that.
-            "activity_start_clamped": clamped,
+            "seed_days": seeds,
             "days_in_span": len(span),
             "days_elided": len(elided),
             "elided_days": elided,
@@ -999,13 +1111,20 @@ def build_payload(episode, activity_start):
             "reasoning_days": sorted(reasoning_days),
             "reasoning_available": bool(reasoning),
             "reasoning_note": reason_note,
-            "errors": len(errs)}
-    return "\n".join(s), prov
+            "errors": len(all_errs),
+            "errors_shown": len(errs)}
+    payload = "\n".join(s)
+    if len(payload) > EXPLAIN_PAYLOAD_CHARS:
+        raise ValueError(
+            f"explain payload is {len(payload):,} chars after deterministic "
+            f"compression; hard limit is {EXPLAIN_PAYLOAD_CHARS:,}"
+        )
+    return payload, prov
 
 
-def explain(episode, activity_start, stub=False):
-    """Call 2: why did it happen, what was available, was it corrected."""
-    payload, prov = build_payload(episode, activity_start)
+def explain(window, stub=False):
+    """Pass 1: find and explain episodes in the detailed evidence window."""
+    payload, prov = build_payload(window)
     text, usage = R.call(R.MODELS["judge"], R.prompt("stage2", check=False),
                          payload, stub, stub_json=STUB_JSON)
     obj, salvaged = R._json(text)
@@ -1021,11 +1140,270 @@ def explain(episode, activity_start, stub=False):
             "raw": None if obj else text[:400]}
 
 
-def run_episode(ep, stub=False, runs=None):
-    rec = {"episode_id": ep["episode_id"], "agent": ep["agent"],
-           "onset": ep["onset"], "calls": [], "error": None}
+def _fact(record, key):
+    entry = ((record or {}).get("facts") or {}).get(key) or {}
+    return entry.get("value")
+
+
+def _brief(value, limit=180):
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def build_spine(agent, lo, hi, runs):
+    """Compact existing-data view used to choose evidence, never as proof."""
+    rows, goal_changes, previous_goal = [], [], None
+    days = window_days(agent, lo, hi)
+    source_counts = {
+        "block_and_descriptor": 0,
+        "block_only": 0,
+        "descriptor_only": 0,
+        "missing": 0,
+    }
+    missing_days = []
+    for day in days:
+        record = _block_record(agent, day)
+        run = runs.get((agent, day)) or {}
+        goal = _fact(record, "assigned")
+        age = _fact(record, "days_since_goal_change")
+        if record and (age == 0 or (previous_goal is not None
+                                   and goal != previous_goal)):
+            goal_changes.append(day)
+        if goal is not None:
+            previous_goal = goal
+
+        activities = run.get("threads") or []
+        if record and activities:
+            source = "block_and_descriptor"
+        elif record:
+            source = "block_only"
+        elif activities:
+            source = "descriptor_only"
+        else:
+            source = "missing"
+            missing_days.append(day)
+        source_counts[source] += 1
+
+        context = (record or {}).get("context") or {}
+        intents = context.get("session_goals_today") or []
+        if not record and not activities:
+            rows.append(f"{day}  [no spine data]")
+            continue
+
+        parts = []
+        if goal is not None:
+            changed = " CHANGED" if day in goal_changes else ""
+            parts.append(f"goal{changed}={_brief(goal, 140)}")
+            description = _fact(record, "assigned_description")
+            if description:
+                parts.append(f"goal_detail={_brief(description, 120)}")
+            parts.append(f"goal_open={bool(_fact(record, 'goal_is_open'))}")
+        if activities:
+            parts.append("activities=" + " | ".join(
+                _brief(activity, 100) for activity in activities))
+        elif intents:
+            # Mechanical fallback for days without a Stage-1 descriptor.
+            fallback = [intents[0]]
+            if intents[-1] != intents[0]:
+                fallback.append(intents[-1])
+            parts.append("intent=" + " -> ".join(_brief(x, 120)
+                                                   for x in fallback))
+        span, mix = _fact(record, "span"), _fact(record, "action_mix")
+        if span is not None:
+            parts.append(f"span={_brief(span, 40)}")
+        if mix is not None:
+            parts.append(f"actions={_brief(mix, 120)}")
+        for key, label in (("operator_messages_today", "operator"),
+                           ("peer_requests", "peer_requests"),
+                           ("reached_audience", "deliveries")):
+            if key in context:
+                parts.append(f"{label}={len(context.get(key) or [])}")
+        rows.append(f"{day}  " + " ; ".join(parts))
+    coverage = {
+        "spine_days_total": len(days),
+        "spine_days_present": len(days) - len(missing_days),
+        "spine_days_missing": len(missing_days),
+        "spine_missing_days": missing_days,
+        "spine_sources": source_counts,
+    }
+    return "\n".join(rows), goal_changes, coverage
+
+
+def _clip_revision_day(text, limit):
+    if len(text) <= limit:
+        return text, False
+    marker = ("\n\n[DAY CLIPPED TO FIT THE REVISION BUDGET. The omitted "
+              "middle is unavailable here and its absence is not evidence.]\n\n")
+    room = max(0, limit - len(marker))
+    head = room // 2
+    tail = room - head
+    return text[:head] + marker + (text[-tail:] if tail else ""), True
+
+
+def build_revision_payload(window, initial, walked, runs):
+    """Bounded evidence packet for reconsidering a draft after the walk."""
+    agent = window["agent"]
+    seeds = _seed_dates(window)
+    start = walked.get("activity_start")
+    if not start:
+        raise ValueError("walk returned no activity_start for revision")
+    win = window.get("window") or window
+    hi = win.get("forward_to") or seeds[-1]
+    lo = min(start, seeds[0])
+    spine, goal_changes, spine_coverage = build_spine(agent, lo, hi, runs)
+
+    priorities, required = {}, set()
+
+    def want(day, priority, is_required=False):
+        if not day:
+            return
+        day = str(day)[:10]
+        try:
+            _date(day)
+        except ValueError:
+            return
+        if lo <= day <= hi:
+            priorities[day] = min(priority, priorities.get(day, priority))
+            if is_required:
+                required.add(day)
+
+    for offset in (-1, 0, 1):
+        want(_shift(start, offset), 0, is_required=offset == 0)
+    for day in goal_changes:
+        for offset in (-1, 0, 1):
+            want(_shift(day, offset), 1, is_required=offset == 0)
+    for day in seeds:
+        want(day, 1, is_required=True)
+    for episode in initial.get("episodes") or []:
+        if not isinstance(episode, dict):
+            continue
+        for key in ("onset", "corrected_at"):
+            value = episode.get(key)
+            if value:
+                want(value, 2, is_required=True)
+
+    ordered = sorted(priorities, key=lambda day: (priorities[day], day))
+    chosen = ordered[:REVISION_DETAIL_DAYS_MAX]
+    omitted = sorted(set(ordered) - set(chosen))
+    draft = json.dumps(initial, ensure_ascii=False, indent=1, default=str)
+    walk_summary = json.dumps({
+        "activity_start": walked.get("activity_start"),
+        "activity_start_note": walked.get("activity_start_note"),
+        "anchor": walked.get("anchor"),
+        "truncated": walked.get("truncated"),
+    }, ensure_ascii=False, indent=1)
+    head = (f"WINDOW REVISION  agent: {agent}\n"
+            f"seed days: {', '.join(seeds)}\n\n"
+            "INITIAL DRAFT (a hypothesis, not evidence):\n"
+            f"{draft}\n\n"
+            "BACKWARD WALK RESULT (a locator, not evidence):\n"
+            f"{walk_summary}\n\n"
+            "COMPACT DAILY SPINE (navigation only, not quotable evidence):\n"
+            f"{spine}\n\n"
+            "DETAILED SOURCE EXCERPTS:\n")
+
+    # If many boundary days compete for space, retain fewer days rather than
+    # shrinking every one into illegibility.
+    available = REVISION_PAYLOAD_CHARS - len(head)
+    while len(chosen) > 1 and available // len(chosen) < 12_000:
+        omitted.append(chosen.pop())
+    per_day = min(REVISION_DAY_CHARS_MAX,
+                  max(4_000, available // max(1, len(chosen))))
+    sections, missing, clipped = [], [], []
+    for day in sorted(chosen):
+        text, source = day_evidence(agent, day)
+        if text is None:
+            missing.append(day)
+            sections.append(f"\n{'=' * 72}\nDAY {day}  [MISSING]\n"
+                            f"{'=' * 72}\n[no evidence on disk]")
+            continue
+        body, was_clipped = _clip_revision_day(text, per_day - 120)
+        if was_clipped:
+            clipped.append(day)
+        sections.append(f"\n{'=' * 72}\nDAY {day}  source={source}\n"
+                        f"{'=' * 72}\n{body}")
+    payload = head + "\n".join(sections)
+    hard_truncated = False
+    if len(payload) > REVISION_PAYLOAD_CHARS:
+        hard_truncated = True
+        marker = ("\n\n[REVISION PAYLOAD HIT ITS HARD CHARACTER LIMIT. "
+                  "Treat the cut as missing evidence.]")
+        payload = payload[:REVISION_PAYLOAD_CHARS - len(marker)] + marker
+    provenance = {
+        "spine_range": [lo, hi],
+        **spine_coverage,
+        "goal_change_days": goal_changes,
+        "detail_days": sorted(chosen),
+        "detail_days_omitted": sorted(set(omitted)),
+        "detail_days_missing": missing,
+        "required_detail_days": sorted(required),
+        "required_days_omitted": sorted(required & set(omitted)),
+        "required_days_missing": sorted(required & set(missing)),
+        "detail_days_clipped": clipped,
+        "hard_truncated": hard_truncated,
+        "payload_chars": len(payload),
+    }
+    return payload, provenance
+
+
+def revision_blockers(provenance):
+    """Reasons a revision cannot produce a complete window before any call."""
+    blockers = {}
+    for key in ("required_days_missing", "required_days_omitted"):
+        if provenance.get(key):
+            blockers[key] = list(provenance[key])
+    if provenance.get("hard_truncated"):
+        blockers["hard_truncated"] = True
+    return blockers
+
+
+def revise(window, initial, walked, stub=False, runs=None):
+    """Re-adjudicate after a walk, unless packet construction proves it futile."""
+    runs = runs if runs is not None else _run_index()
+    payload, provenance = build_revision_payload(window, initial, walked, runs)
+    blockers = revision_blockers(provenance)
+    if blockers:
+        return {
+            "verdict": {},
+            "provenance": provenance,
+            "salvaged": False,
+            "usage": None,
+            "payload_chars": len(payload),
+            "stop_reason": None,
+            "refused": False,
+            "raw": None,
+            "skipped": True,
+            "blockers": blockers,
+        }
+    system = (R.prompt("stage2", check=False) + "\n\n" +
+              R.prompt("stage2_revision", check=False))
+    revision_stub = json.loads(REVISION_STUB_JSON)
+    revision_stub["episodes"][0]["activity_start"] = walked["activity_start"]
+    text, usage = R.call(R.MODELS["judge"], system, payload, stub,
+                         stub_json=json.dumps(revision_stub))
+    obj, salvaged = R._json(text)
+    obj = obj if isinstance(obj, dict) else {}
+    stop = (usage or {}).get("stop_reason")
+    return {"verdict": obj, "provenance": provenance,
+            "salvaged": salvaged, "usage": usage,
+            "payload_chars": len(payload), "stop_reason": stop,
+            "refused": stop == "refusal", "raw": None if obj else text[:400],
+            "skipped": False, "blockers": {}}
+
+
+def run_window(window, stub=False, runs=None, fingerprint=None,
+               fingerprint_summary=None):
+    runs = runs if runs is not None else _run_index()
+    if fingerprint is None or fingerprint_summary is None:
+        fingerprint, fingerprint_summary = input_fingerprint(window, runs)
+    rec = {"window_id": window["window_id"], "agent": window["agent"],
+           "seed_days": _seed_records(window),
+           "schema_version": OUTPUT_SCHEMA_VERSION,
+           "input_fingerprint": fingerprint,
+           "input_coverage": fingerprint_summary,
+           "calls": [], "error": None}
     try:
-        # PASS 1: explain a contiguous window grown back from the flagged
+        # PASS 1: explain a contiguous window grown back from the seed
         # days under the token budget. The walk does NOT run first any more.
         #
         # It used to, on the theory that the window could not be sized until
@@ -1036,7 +1414,7 @@ def run_episode(ep, stub=False, runs=None):
         # walk earns its cost only where the activity genuinely predates
         # what one read can hold -- which the judge now reports directly,
         # rather than being guessed at in advance.
-        e = explain(ep, None, stub=stub)
+        e = explain(window, stub=stub)
         rec["calls"].append({"stage": "explain", "model": R.MODELS["judge"],
                              "usage": e["usage"]})
 
@@ -1045,22 +1423,78 @@ def run_episode(ep, stub=False, runs=None):
         need_walk = [x for x in (v0.get("episodes") or [])
                      if isinstance(x, dict) and x.get("activity_predates_window")]
         rec["needed_walk"] = bool(need_walk)
+        final = e
+        rec["status"] = "final"
         if need_walk and not e.get("refused"):
-            w = walk(ep, stub=stub, runs=runs)
+            w = walk(window, stub=stub, runs=runs)
             rec["walk"] = w
             if w.get("usage"):
                 rec["calls"].append({"stage": "walk",
                                      "model": R.MODELS["judge"],
                                      "usage": w["usage"]})
-            # The walk's answer is recorded ALONGSIDE the judge's, never
-            # written over it. They are different measurements -- the judge
-            # saw the days, the walk saw 3-8 word descriptors -- and a
-            # disagreement is a finding rather than something to resolve
-            # silently in favour of whichever ran last.
-            if not w.get("error"):
-                for x in need_walk:
-                    x["activity_start_from_walk"] = w.get("activity_start")
-                    x["walk_anchor"] = w.get("anchor")
+            if not w.get("error") and w.get("activity_start"):
+                rec["initial_verdict"] = v0
+                revision = revise(window, v0, w, stub=stub, runs=runs)
+                rec["revision"] = {
+                    "provenance": revision["provenance"],
+                    "salvaged": revision["salvaged"],
+                    "raw": revision["raw"],
+                    "stop_reason": revision["stop_reason"],
+                    "refused": revision["refused"],
+                    "payload_chars": revision["payload_chars"],
+                    "skipped": revision.get("skipped", False),
+                    "blockers": revision.get("blockers", {}),
+                }
+                if revision.get("usage") is not None:
+                    rec["calls"].append({"stage": "revision",
+                                         "model": R.MODELS["judge"],
+                                         "usage": revision["usage"]})
+                revised = revision["verdict"]
+                usable = (not revision["refused"]
+                          and not revision.get("skipped")
+                          and revision["raw"] is None
+                          and isinstance(revised.get("episodes"), list)
+                          and revised.get("examined") is not None)
+                if usable:
+                    final = revision
+                    if w.get("truncated"):
+                        rec["status"] = "incomplete"
+                        rec["missing_evidence_for"] = [
+                            "activity_start predates the descriptor index"]
+                    gaps = revision["provenance"]
+                    if (gaps.get("required_days_omitted")
+                            or gaps.get("required_days_missing")
+                            or gaps.get("hard_truncated")):
+                        rec["status"] = "incomplete"
+                        rec.setdefault("missing_evidence_for", []).append(
+                            "required revision boundary evidence was omitted "
+                            "or unavailable")
+                elif revision.get("skipped"):
+                    rec["status"] = "incomplete"
+                    rec["missing_evidence_for"] = [
+                        "required revision boundary evidence was omitted "
+                        "or unavailable"]
+                    rec["revision_error"] = (
+                        "revision skipped before model call: "
+                        + json.dumps(revision.get("blockers") or {},
+                                     sort_keys=True))
+                else:
+                    rec["status"] = "incomplete"
+                    rec["missing_evidence_for"] = [
+                        "post-walk revision did not return a usable answer"]
+            else:
+                rec["status"] = "incomplete"
+                rec["missing_evidence_for"] = [
+                    "activity_start", "onset", "mechanism"]
+                rec["revision_error"] = (w.get("error")
+                                         or "walk returned no activity_start")
+
+            # One walk follows one anchor activity. Do not quietly claim it
+            # expanded several distinct predating episodes.
+            if len(need_walk) > 1:
+                rec["status"] = "incomplete"
+                rec.setdefault("missing_evidence_for", []).append(
+                    "separate activity_start for additional predating episodes")
         # A LIST OF EPISODES, NOT A VERDICT. The window is the input unit;
         # the episode is the output unit, and a window routinely holds more
         # than one -- see stage2.md's header for why a single verdict per
@@ -1070,9 +1504,18 @@ def run_episode(ep, stub=False, runs=None):
         # `examined: false` is "could not tell". Keeping them distinct here
         # matters as much as in the payload: collapsed, a window nobody
         # could read scores identically to a clean one.
-        v = e["verdict"]
+        v = final["verdict"]
         eps = v.get("episodes")
         eps = eps if isinstance(eps, list) else []
+        if v.get("examined") is not True:
+            rec["status"] = "incomplete"
+            rec.setdefault("missing_evidence_for", []).append(
+                "Stage 2 reported that the supplied evidence was insufficient")
+        if any(isinstance(x, dict) and x.get("activity_predates_window")
+               for x in eps):
+            rec["status"] = "incomplete"
+            rec.setdefault("missing_evidence_for", []).append(
+                "activity still predates the expanded evidence")
         rec.update({
             "examined": v.get("examined"),
             "examined_note": v.get("examined_note"),
@@ -1082,8 +1525,10 @@ def run_episode(ep, stub=False, runs=None):
                 "activity_start"),
             "walk_activity_start_note": (rec.get("walk") or {}).get(
                 "activity_start_note"),
-            "provenance": e["provenance"],
-            "payload_chars": e["payload_chars"],
+            "provenance": final["provenance"],
+            "payload_chars": final["payload_chars"],
+            "initial_provenance": e["provenance"],
+            "initial_payload_chars": e["payload_chars"],
             # WITHOUT THESE, AN UNPARSEABLE ANSWER IS INDISTINGUISHABLE FROM
             # A JUDGE THAT FOUND NOTHING. R._json failing leaves `v` as {},
             # so every field above lands None/[] while error stays None --
@@ -1094,20 +1539,23 @@ def run_episode(ep, stub=False, runs=None):
             "explain_salvaged": e["salvaged"],
             "explain_raw": e["raw"],
         })
-        rec["stop_reason"] = e.get("stop_reason")
+        rec["stop_reason"] = final.get("stop_reason")
         if e.get("refused"):
+            rec["status"] = "incomplete"
             rec["error"] = ("the judge REFUSED this window (stop_reason="
                             "refusal, no text returned). This is not a "
                             "finding of 'no drift' and must not be scored "
                             "as one.")
         elif e["raw"] is not None:
+            rec["status"] = "incomplete"
             rec["error"] = ("explain returned unparseable output; the text is "
-                            "in explain_raw. This episode has NO verdict.")
+                            "in explain_raw. This window has NO verdict.")
     # SystemExit, not just Exception. run.py raises it for an over-cap
-    # payload, and one oversized episode was killing the whole batch
-    # sixteen episodes in. A per-episode failure belongs in that episode's
+    # payload, and one oversized window was killing the whole batch
+    # sixteen windows in. A per-window failure belongs in that window's
     # record; it is not a reason to stop processing the others.
     except (Exception, SystemExit) as exc:        # noqa: BLE001
+        rec["status"] = "incomplete"
         rec["error"] = R._redact(f"{type(exc).__name__}: {exc}",
                                  os.environ.get("ANTHROPIC_API_KEY"),
                                  os.environ.get("OPENAI_API_KEY"))
@@ -1122,105 +1570,102 @@ def cost(rec):
                for c in rec.get("calls", []))
 
 
-def load_units():
-    """The things --all iterates, from windows.jsonl or the legacy file.
+def already_done(path, fingerprint, stub=False):
+    """Resume only records written under the current contract and inputs."""
+    if not R.already_done(path, stub):
+        return False
+    try:
+        rec = json.load(open(path))
+    except Exception:
+        return False
+    return bool(rec.get("window_id") and rec.get("seed_days")
+                and rec.get("schema_version") == OUTPUT_SCHEMA_VERSION
+                and rec.get("input_fingerprint") == fingerprint
+                and "onset" not in rec)
 
-    A window carries `window_id` and bounds; a legacy episode carries
-    `episode_id` and an `onset`. Normalised here so the rest of the file
-    sees one shape -- and so the fallback is NAMED in the output rather
-    than being a silent substitution of one unit for another.
-    """
-    if os.path.exists(WINDOWS):
-        rows = [json.loads(l) for l in open(WINDOWS) if l.strip()]
-        for r in rows:
-            r.setdefault("episode_id", r.get("window_id"))
-            # A window has no onset of its own; the earliest day Stage 1
-            # flagged is the closest thing, and anchor_day_for refines it.
-            fl = r.get("flagged_days") or r.get("selected_days") or []
-            r.setdefault("onset", fl[0] if fl else None)
-            r.setdefault("window", {"back_to": r.get("back_to"),
-                                    "forward_to": r.get("forward_to")})
-        return [r for r in rows if r.get("onset")], WINDOWS
-    if os.path.exists(EPISODES):
-        return ([json.loads(l) for l in open(EPISODES) if l.strip()],
-                EPISODES)
-    raise SystemExit(f"no units to run: neither {WINDOWS} nor {EPISODES}")
+
+def load_windows():
+    """Load and validate the sole Stage-2 input unit."""
+    if not os.path.exists(WINDOWS):
+        raise SystemExit(f"no windows to run: {WINDOWS}")
+    rows = [json.loads(l) for l in open(WINDOWS) if l.strip()]
+    for row in rows:
+        if not row.get("window_id") or not row.get("agent"):
+            raise ValueError("each window requires window_id and agent")
+        _seed_records(row)
+    return rows, WINDOWS
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--episode", help="episode_id from episodes_mechanical.jsonl")
+    ap.add_argument("--window", help="window_id from windows.jsonl")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--stub", action="store_true",
                     help="exercise the whole path, no API calls, no money")
     ap.add_argument("--dry", action="store_true",
                     help="build the payload and report its size, then stop")
+    ap.add_argument("--rerun", action="store_true",
+                    help="ignore matching Stage-2 cache records")
     a = ap.parse_args()
 
-    eps, src = load_units()
-    if a.episode:
-        eps = [e for e in eps if e["episode_id"] == a.episode]
-        if not eps:
-            raise SystemExit(f"no episode {a.episode!r} in {src}")
+    windows, src = load_windows()
+    if a.window:
+        windows = [w for w in windows if w["window_id"] == a.window]
+        if not windows:
+            raise SystemExit(f"no window {a.window!r} in {src}")
     elif not a.all:
-        raise SystemExit("pass --episode <id> or --all")
+        raise SystemExit("pass --window <id> or --all")
     if a.limit is not None:      # `if a.limit:` made --limit 0 run everything
-        eps = eps[:a.limit]
+        windows = windows[:a.limit]
 
     if a.dry:
         runs = _run_index()
         sysmsg = R.prompt("stage2", check=False)
         worst = 0
-        for e in eps:
-            idx, days, _ = descriptor_index(e["agent"], e["onset"], runs=runs)
-            # Sweep a few plausible walk answers, not just None. --dry
-            # measured only activity_start=None, which is the SMALLEST
-            # payload an episode can produce, so it reported "fine" for
-            # episodes that then died inside R.call on the real run.
-            sizes = []
-            for back in (0, 7, 21, 60):
-                st = (_date(e["onset"])
-                      - datetime.timedelta(days=back)).isoformat()
-                payload, prov = build_payload(e, st)
-                sizes.append((int((len(sysmsg) + len(payload)) / 1.9),
-                              back, prov))
-            est, back, prov = max(sizes)
+        for window in windows:
+            seeds = _seed_dates(window)
+            idx, days, _ = descriptor_index(window["agent"], seeds[0], runs=runs)
+            payload, prov = build_payload(window)
+            est = int((len(sysmsg) + len(payload)) / 1.9)
             worst = max(worst, est)
-            over = "  *** OVER GUARD ***" if est > R.MAX_INPUT_TOKENS else ""
-            print(f"  {e['episode_id']}")
+            over = "  *** OVER LIMIT ***" if est > MAX_PAYLOAD_TOKENS else ""
+            print(f"  {window['window_id']}")
             print(f"    descriptor index {len(days):>3} days, "
                   f"~{len(idx)/4.23:>7,.0f} tok")
             print(f"    worst payload    {prov['days_read']:>3} days, "
-                  f"{est:>9,} tok at start-{back}d  "
+                  f"{est:>9,} tok  "
                   f"(reasoning: {prov['reasoning_available']}, "
                   f"errors: {prov['errors']}){over}")
         print(f"  worst across set: {worst:,} tok "
-              f"(guard {R.MAX_INPUT_TOKENS:,})")
+              f"(explain limit {MAX_PAYLOAD_TOKENS:,})")
         return
 
     os.makedirs(OUT, exist_ok=True)
     runs = _run_index()
     total = 0.0
     done = 0
-    for i, e in enumerate(eps, 1):
-        out = os.path.join(OUT, f"{e['episode_id']}.json")
+    for i, window in enumerate(windows, 1):
+        out = os.path.join(OUT, f"{window['window_id']}.json")
+        fingerprint, fingerprint_summary = input_fingerprint(window, runs)
         # RESUME. Shared with run.py rather than reimplemented -- stage2 had
         # no resume at all, which is exactly what a second copy of a runner
         # loop costs you. See R.already_done for the stub and error rules.
-        if R.already_done(out, a.stub):
-            print(f"  [{i}/{len(eps)}] {e['episode_id']}  cached")
+        if not a.rerun and already_done(out, fingerprint, a.stub):
+            print(f"  [{i}/{len(windows)}] {window['window_id']}  cached")
             continue
-        rec = run_episode(e, stub=a.stub, runs=runs)
+        rec = run_window(window, stub=a.stub, runs=runs,
+                         fingerprint=fingerprint,
+                         fingerprint_summary=fingerprint_summary)
         total += cost(rec)
         done += 1
         with open(out, "w") as fh:
             json.dump(rec, fh, indent=1, ensure_ascii=False, default=str)
         flag = f"ERROR {rec['error']}" if rec.get("error") else (
-            f"activity_start={rec.get('activity_start')} "
-            f"{'(TRUNCATED)' if (rec.get('walk') or {}).get('truncated') else ''}")
-        print(f"  [{i}/{len(eps)}] {e['episode_id']}  {flag}")
-    print(f"  wrote {done} of {len(eps)} ({len(eps) - done} cached) "
+            f"status={rec.get('status')} episodes={rec.get('n_drift_episodes', 0)} "
+            f"{'(TRUNCATED WALK)' if (rec.get('walk') or {}).get('truncated') else ''}")
+        print(f"  [{i}/{len(windows)}] {window['window_id']}  {flag}")
+    print(f"  wrote {done} of {len(windows)} ({len(windows) - done} cached) "
           f"-> {OUT}   ${total:.2f}")
 
 

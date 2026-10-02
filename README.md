@@ -163,6 +163,23 @@ verdict is drift   OR   verdict is not-drift AND confidence < 0.74
 Reads 53% of scored days, catches 25 of 25. Implemented in
 `audit/pipeline.py`, which also builds the windows Stage 2 reads.
 
+After the corpus-wide Stage 1 run, validate its exact expected row set before
+paying for Stage 2:
+
+```bash
+python3 audit/pipeline.py validate --tag B-full --rows full
+```
+
+The command exits nonzero until every expected active day has a successful
+Arm-B result, a list-form `day_activity`, a current deterministic block and raw
+evidence. It also prints per-window missing descriptor, block and evidence
+dates, plus warnings when the expected row set itself contains too little
+contiguous history for a backward walk.
+
+Stage 2 cache entries are tied to an input-coverage fingerprint, so completing
+that backfill automatically reruns affected windows. Pass `--rerun` to
+`audit/stage2.py` to force a fresh judgement even when the fingerprint matches.
+
 Current run `B-peerfix`, 93 scorable rows of 100:
 
 ```

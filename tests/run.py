@@ -9,12 +9,52 @@ That silence reads as success. This runner actually calls them.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import os
+import pathlib
 import sys
+import tempfile
 import traceback
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+
+
+class _MonkeyPatch:
+    """The small subset of pytest's fixture used by this suite."""
+
+    def __init__(self):
+        self._patches = []
+
+    def setattr(self, target, name, value):
+        patch = mock.patch.object(target, name, value)
+        patch.start()
+        self._patches.append(patch)
+
+    def undo(self):
+        for patch in reversed(self._patches):
+            patch.stop()
+        self._patches.clear()
+
+
+def _call_test(fn):
+    """Call one test with the dependency-free fixtures the suite uses."""
+    params = inspect.signature(fn).parameters
+    unknown = sorted(set(params) - {"monkeypatch", "tmp_path"})
+    if unknown:
+        raise TypeError(f"unsupported test fixture(s): {', '.join(unknown)}")
+
+    monkeypatch = _MonkeyPatch()
+    with tempfile.TemporaryDirectory() as tmp:
+        fixtures = {
+            "monkeypatch": monkeypatch,
+            "tmp_path": pathlib.Path(tmp),
+        }
+        try:
+            fn(**{name: fixtures[name] for name in params})
+        finally:
+            monkeypatch.undo()
 
 
 def main() -> int:
@@ -28,7 +68,7 @@ def main() -> int:
             mod.setup_module(mod)
         for fn in sorted(d for d in dir(mod) if d.startswith("test_")):
             try:
-                getattr(mod, fn)()
+                _call_test(getattr(mod, fn))
                 ok += 1
             except Exception:
                 fails.append((name, fn, traceback.format_exc()))

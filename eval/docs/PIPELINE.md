@@ -113,6 +113,23 @@ This did not exist until 2026-10-01. Stage 1 wrote verdicts and Stage 2 read a
 different file; the selection rule lived only as prose in the README and the
 window builder lived only in a conversation.
 
+### Post-Stage-1 readiness gate
+
+Before any paid Stage 2 calls, run:
+
+```bash
+python3 audit/pipeline.py validate --tag B-full --rows full
+```
+
+The row set is the manifest of active agent-days Stage 1 was expected to
+process. The validator exits nonzero and names exact dates for missing or
+failed runs, invalid `day_activity`, missing/stale blocks and missing raw
+evidence. For each resulting Stage 2 window it also reports expected versus
+contiguous descriptor depth and the precise missing descriptor, block and
+evidence days. This explicit manifest is necessary: without it, an unprocessed
+day is indistinguishable from a genuinely inactive day. A sparse row set is
+rejected when it supplies fewer than two contiguous days before a walk anchor.
+
 ### The selection rule
 
 ```
@@ -151,7 +168,14 @@ episodes not-drift at the day level; the confidence threshold caught all four.
 
 ### Window construction
 
-A window is grown **contiguously** outward from the flagged days under a token
+A selected day becomes a structured `seed_days` record containing its date,
+Stage-1 verdict, confidence and routing reason (`positive` or
+`low_confidence`). Those details remain handoff provenance for auditability;
+the Stage-2 judge sees only the seed dates. There is no input `onset` and no
+persisted selection anchor. `onset` belongs exclusively to each episode Stage 2
+finds.
+
+A window is grown **contiguously** outward from the seed days under a token
 budget: backward first, then forward with the remainder.
 
 Backward first because that is where the answer is — the question is when the
@@ -171,12 +195,13 @@ an `examined` flag separating *"I read this and there is no drift"* from
 
 Prompt: `audit/stage2.md`. Implementation: `audit/stage2.py`.
 
-### Two passes
+### Three passes, two conditional
 
 ```
-  pass 1   explain a contiguous token-bounded window ending at the flagged days
+  pass 1   explain a contiguous token-bounded window around the seed days
   trigger  the judge sets `activity_predates_window` on an episode
   pass 2   the walk — a cheap descriptor index reaching ~45 days back for ~4¢
+  pass 3   revise — a bounded compact spine plus detailed boundary evidence
 ```
 
 The walk used to run **first**, on the theory that a window could not be sized
@@ -187,9 +212,36 @@ have shown. The walk earns its cost only where the activity genuinely predates
 what one read can hold — which the judge now reports directly instead of being
 guessed at in advance.
 
-When pass 2 runs, the walk's answer is recorded **alongside** the judge's,
-never over it. They are different measurements — the judge saw the days, the
-walk saw 3–8 word descriptors — and a disagreement is a finding.
+The walk's answer is a locator, not a field pasted onto the initial causal
+account. When it runs, a revision call reconsiders every episode field using a
+compact projection of existing block records and `day_activity`, plus detailed
+evidence around the discovered start, goal changes and seed days. The initial
+answer remains in the output for provenance. If the walk is truncated or the
+bounded revision cannot answer, the window is explicitly `incomplete`.
+
+The revision packet has a 380K-character hard cap (roughly 200K tokens under
+the conservative estimator) and at most 12 detailed days. The spine is for
+navigation only and cannot be cited as evidence.
+
+Revision provenance distinguishes the spine's requested calendar range from
+its actual coverage: `spine_days_total`, `spine_days_present`,
+`spine_days_missing`, the exact `spine_missing_days`, and counts for
+`block_and_descriptor`, `block_only`, `descriptor_only`, and `missing` source
+types. A 180-day range containing three populated rows therefore reports three
+present days, not a misleading 180-day spine.
+
+Packet construction is also the revision preflight. If a required boundary
+day is missing or omitted, or the packet hits its hard truncation fallback,
+`revise()` records the exact blocker and returns without making a model call.
+Under the current window-level completeness contract such a call could not
+produce a usable final window, even if it improved an optional field.
+
+Stage 2 resume records carry an `input_fingerprint`. It covers the window and
+seed contract, effective prompts and judge model, descriptor contents, limits,
+and block/raw/digest file state across the possible walk range. A new Stage-1
+descriptor or backfilled evidence artifact therefore invalidates an older
+cached result automatically. `--rerun` remains available when an intentional
+fresh judgement is wanted despite identical inputs.
 
 ### What it reads
 
@@ -197,12 +249,24 @@ walk saw 3–8 word descriptors — and a disagreement is a finding.
   ONE artifact per day, at two depths:
     derived layer     27 computed facts + 7 verbatim context sections
     + evidence layer  bash, chat, last memory snapshot, reasoning
-  + unsampled reasoning   flagged days and the day before each, 25% of budget
-  + tool errors           ~45 tok/day, with the days actually searched named
+  + unsampled reasoning   seed days and the day before each, 25% of budget
+  + tool errors           systematic sample, total and searched days named
 ```
 
 Stage 1 reads the derived layer alone; Stage 2 reads the same record with
 evidence appended — `render(rec, raw, with_evidence=True)`.
+
+The compression is shared and CPU-only. `drift/compress.py` owns systematic
+sampling and clipping, while `drift/evidence.py` supplies explicit human and
+Stage-2 policies. Both stages therefore use the same deterministic projection
+and selection primitives, but not identical views: Stage 1 deliberately omits
+reasoning; Stage 2 uses tighter command/chat quotas and causal reasoning. A
+model never summarizes evidence before the Stage-2 judge sees it. Every sample,
+clip and omitted count is disclosed in the rendered text.
+
+Seed and run-up reasoning is rendered once in its dedicated boundary section,
+not repeated in the ordinary per-day sample. Error lines are capped at 100 by
+the same systematic sampler; operator messages remain exhaustive.
 
 Until 2026-10-01 these were two documents. Stage 2 sliced the computed head
 off a rendered block with a string split and concatenated it to a whole
@@ -247,7 +311,9 @@ agent, one window, varying only the amount:
 A refusal returns an empty thinking block and **no text**, so it arrives
 downstream as "zero episodes" — a non-answer wearing a negative answer's
 clothes. It is probabilistic, not a cliff: another window refused once and
-answered twice at ~330K. Budget is **250K tokens**. Refusals are retried
+answered twice at ~330K. Budget is **250K tokens**, enforced against the fully
+rendered payload using the conservative 1.9 chars/token estimator rather than
+the more generous observed mean. Refusals are retried
 (capped, counted) and excluded from scoring, never counted as findings.
 
 **Days are not a unit of size.** Median digest size runs from 3,378 tokens/day

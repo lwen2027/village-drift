@@ -19,10 +19,9 @@ window bounds. Nothing else. Not `activity`, not `q1_activity_start`, not
 are not an answer: across the set `back_to` never equals the activity start
 and precedes it by 4 days to 6 weeks.
 
-`flagged_days` comes from STAGE 1's own verdicts on the seed days, not from
-the human labels. Production tells Stage 2 which days Stage 1 flagged, so
-using Stage 1 is faithful; using the verified days would hand it a cleaner
-input than it will ever get, and would quietly leak the answer on negatives.
+Seed routing comes from STAGE 1's own verdicts, not from the human labels.
+The handoff retains that provenance for auditing, while the Stage-2 judge
+receives only the seed dates.
 
 SCORING. The label is one episode; Stage 2 returns a list. A window holds
 more than one episode in 14 of 20 cases, so a prediction is counted against
@@ -84,18 +83,18 @@ def cases():
     return out
 
 
-def stage1_flagged(agent, days, vs):
-    """Which of `days` Stage 1 called drift, and which the rule selected."""
-    flagged, sel = [], []
+def stage1_seeds(agent, days, vs):
+    """Structured routing records for label seed days Stage 1 selected."""
+    seeds = []
     for day in days:
         v = vs.get((agent, day))
         if not v:
             continue
-        if v["is_drift"]:
-            flagged.append(day)
-        if v["is_drift"] or v["confidence"] < P.CONFIDENCE_CUT:
-            sel.append(day)
-    return sorted(flagged), sorted(sel)
+        if (v["is_drift"] is True
+                or (v["is_drift"] is False
+                    and v["confidence"] < P.CONFIDENCE_CUT)):
+            seeds.append(P.routing_seed(day, v))
+    return sorted(seeds, key=lambda seed: seed["day"])
 
 
 def main():
@@ -116,10 +115,10 @@ def main():
     # by Stage 1 and would never reach Stage 2 in production.
     kept = []
     for c in cs:
-        fl, sel = stage1_flagged(c["agent"], c["seed_days"], vs)
-        if not sel:
+        seeds = stage1_seeds(c["agent"], c["seed_days"], vs)
+        if not seeds:
             continue
-        c["flagged_days"], c["selected_days"] = fl, sel
+        c["routed_seed_days"] = seeds
         kept.append(c)
     dropped = len(cs) - len(kept)
     if a.limit:
@@ -130,28 +129,31 @@ def main():
     sysmsg = R.prompt("stage2", check=False)
 
     for c in kept:
-        ep = {"episode_id": c["episode_id"], "agent": c["agent"],
-              "onset": (c["flagged_days"] or c["selected_days"])[0],
-              "flagged_days": c["flagged_days"],
-              "selected_days": c["selected_days"],
-              "window": c["window"], "goal": None}
+        window = {"window_id": c["episode_id"], "agent": c["agent"],
+                  "seed_days": c["routed_seed_days"],
+                  "window": c["window"], "goal": None}
         if a.dry:
-            txt, prov = S.build_payload(ep, None)
+            txt, prov = S.build_payload(window)
             est = int((len(sysmsg) + len(txt)) / 1.9)
             print(f"  {c['episode_id'][:30]:32s} {prov['days_in_span']:>3}d span "
                   f"{prov['days_read']:>3} read  est {est:>8,} tok"
                   f"{'  *** OVER GUARD ***' if est > R.MAX_INPUT_TOKENS else ''}")
             continue
 
-        # run_episode, not explain() directly -- otherwise the eval skips
-        # pass 2 and measures a pipeline nobody runs.
-        rec = S.run_episode(ep, stub=False, runs=runs)
+        # run_window, not explain() directly -- otherwise the eval skips the
+        # conditional walk and revision and measures a pipeline nobody runs.
+        rec = S.run_window(window, stub=False, runs=runs)
         spend += S.cost(rec)
         eps = rec.get("episodes") or []
-        e = {"refused": rec.get("stop_reason") == "refusal",
-             "stop_reason": rec.get("stop_reason"),
-             "raw": rec.get("explain_raw"),
-             "salvaged": rec.get("explain_salvaged"),
+        revision = rec.get("revision") or {}
+        e = {"refused": (revision.get("refused") if revision
+                          else rec.get("stop_reason") == "refusal"),
+             "stop_reason": (revision.get("stop_reason") if revision
+                             else rec.get("stop_reason")),
+             "raw": (revision.get("raw") if revision
+                     else rec.get("explain_raw")),
+             "salvaged": (revision.get("salvaged") if revision
+                           else rec.get("explain_salvaged")),
              "usage": {}, "provenance": rec.get("provenance")}
         v = {"examined": rec.get("examined"),
              "examined_note": rec.get("examined_note"),
@@ -162,7 +164,8 @@ def main():
         # never gave -- and on a drift episode, silently counts a
         # non-answer as a miss. Measured: one of the first two calls came
         # back stop_reason=refusal and scored as a false negative.
-        usable = (not e.get("refused") and e["raw"] is None
+        usable = (rec.get("status") != "incomplete"
+                  and not e.get("refused") and e["raw"] is None
                   and v.get("examined") is not None)
         pred_drift = len(eps) > 0
         if not usable:
@@ -175,13 +178,15 @@ def main():
                   f"truth={'drift' if c['truth']['is_drift'] else 'not  '} "
                   f"pred={len(eps)} episode(s)")
         rows.append({"episode_id": c["episode_id"], "agent": c["agent"],
-                     "truth": c["truth"], "flagged_days": c["flagged_days"],
+                     "truth": c["truth"],
+                     "seed_days": c["routed_seed_days"],
                      "usable": usable, "refused": e.get("refused"),
                      "stop_reason": e.get("stop_reason"),
                      "examined": v.get("examined"),
                      "examined_note": v.get("examined_note"),
                      "n_pred": len(eps), "pred_drift": pred_drift,
                      "needed_walk": rec.get("needed_walk"),
+                     "status": rec.get("status"),
                      "walk": rec.get("walk"),
                      "episodes": eps, "provenance": e["provenance"],
                      "salvaged": e["salvaged"], "raw": e["raw"]})

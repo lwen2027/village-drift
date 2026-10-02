@@ -29,26 +29,32 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from drift import config, load, rooms as R  # noqa: E402
-from drift.evidence import evidence as _evidence  # noqa: E402
+from drift.evidence import (  # noqa: E402
+    HUMAN_EVIDENCE,
+    addressed_to as _addressed_to,
+    evidence as _evidence,
+    names_agent as _names_agent,
+)
+from drift.compress import clip_words as _clip  # noqa: E402
 
-CMD_CHARS = 160      # enough to see intent and redirect target
+CMD_CHARS = HUMAN_EVIDENCE.command_chars
 # Raised 120 -> 400 on 2026-09-28. The single most decision-relevant thing in
 # tool output is a reading of the assigned metric, and those arrive as JSON
 # payloads — a subscriber dashboard, a DAU worker's /stats, a mana balance —
 # that run past 120 characters and were being cut mid-object. 400 keeps the
 # whole of a typical counter payload without materially growing the digest.
-OUT_CHARS = 400      # results, not intent
+OUT_CHARS = HUMAN_EVIDENCE.output_chars
 GOAL_ANNOUNCEMENTS  = 6   # operator messages on the goal's start day
 OUTREACH_CONSTRAINTS = 5  # most recent standing approval-decision comments
 ANNOUNCE_CHARS = 1400     # announcements carry the constraints; clip gently
-MEM_CHARS = 4000     # the last snapshot of the day
-REASON_CHARS = 420   # per turn
-REASON_TURNS = 30    # systematic sample; see note below
-BASH_TURNS   = 100   # ditto — p90 was 225 KB of shell log per day
-CHAT_PEERS   = 40    # peer messages; human/operator msgs are never sampled
-CHAT_CTX_BEFORE = 3  # messages of antecedent kept around each selected one
-CHAT_CTX_AFTER  = 1
-CHAT_CHARS = 400
+MEM_CHARS = HUMAN_EVIDENCE.memory_chars
+REASON_CHARS = HUMAN_EVIDENCE.reasoning_chars
+REASON_TURNS = HUMAN_EVIDENCE.reasoning_turns
+BASH_TURNS = HUMAN_EVIDENCE.bash_turns
+CHAT_PEERS = HUMAN_EVIDENCE.peer_chat
+CHAT_CTX_BEFORE = HUMAN_EVIDENCE.chat_context_before
+CHAT_CTX_AFTER = HUMAN_EVIDENCE.chat_context_after
+CHAT_CHARS = HUMAN_EVIDENCE.chat_chars
 
 # The village chat is one shared room: rendering all of it put 303 KB of other
 # agents' conversation into every digest (57% of the file) and buried the agent
@@ -59,14 +65,6 @@ CHAT_CHARS = 400
 # Reasoning is sampled the same way — every k-th turn, never "the interesting
 # ones". Dedup, clustering and salience ranking are all methods under test, so
 # none of them can be used to build the surface the ground truth is read from.
-
-
-def _systematic(items: list, n: int) -> list:
-    """Every k-th item. Bounded, reproducible, and embeds no judgement."""
-    if len(items) <= n:
-        return items
-    step = len(items) / n
-    return [items[min(len(items) - 1, int(i * step))] for i in range(n)]
 
 
 def _announcement(gs, announcements, agent: str, roster: set) -> list[dict]:
@@ -92,43 +90,8 @@ def _announcement(gs, announcements, agent: str, roster: set) -> list[dict]:
     return out[:GOAL_ANNOUNCEMENTS]
 
 
-def _addressed_to(text: str, agent: str, roster: set) -> bool:
-    """Is this human/operator message for THIS agent?
-
-    Show it if it names the agent, or names no agent at all (a broadcast like
-    "resume the village for today"). Suppress it if it names only other agents.
-
-    Without this, the nudger drowns the section: it is auto-generated and
-    @-addressed, so on 2026-08-03 Claude Opus 4.6's digest carried 18 nudges
-    sent to Luna, Terra, DeepSeek and six others, and one message actually for
-    everyone. A labeller skimming a wall of "repeatedly idling" can easily
-    mis-attribute it to the agent whose digest it is.
-    """
-    named = {a for a in roster if _names_agent(text, a)}
-    return not named or agent in named
-
-
-def _names_agent(text: str, agent: str) -> bool:
-    """Does this message name the agent? Word-boundary on BOTH sides.
-
-    `@GPT-5` matching inside `@GPT-5.6` silently mis-attributed a nudge count
-    earlier in this project — that is what the trailing guard prevents. The
-    leading guard is the mirror image and matters just as much: without it,
-    agent "A" matched the final letter of "Luna", and "Sol" would match the end
-    of "parasol". `.` and `-` are excluded as well as \\w because agent names
-    contain both (GPT-5.6, Claude Opus 4.7).
-    """
-    import re
-    return bool(re.search(r"(?<![\w.\-])" + re.escape(agent) + r"(?![\w.\-])",
-                          text or "", re.I))
-
-
-def _clip(s, n):
-    s = " ".join(str(s or "").split())
-    return s if len(s) <= n else s[:n] + f" …[+{len(s) - n}c]"
-
-
-def digest(agent: str, day: str, data: dict, roster: set = frozenset()) -> str:
+def digest(agent: str, day: str, data: dict, roster: set = frozenset(),
+           evidence_policy=HUMAN_EVIDENCE) -> str:
     L: list[str] = []
     A = L.append
     A(f"AGENT-DAY DIGEST — {agent} — {day}")
@@ -208,7 +171,7 @@ def digest(agent: str, day: str, data: dict, roster: set = frozenset()) -> str:
     # The evidence layer lives in drift/evidence.py now -- Stage 2 reads it
     # too, and it had no business being private to this file. See there for
     # the derived/evidence split it completes.
-    A(_evidence(agent, data, roster).rstrip())
+    A(_evidence(agent, data, roster, policy=evidence_policy).rstrip())
     return "\n".join(L) + "\n"
 
 

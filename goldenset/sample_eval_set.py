@@ -34,7 +34,8 @@ from goldenset import frame as frame_mod  # noqa: E402
 SORT_KEY = ("era", "activity_decile", "agent", "day")
 
 
-def systematic(rows: list[dict], n: int, rng: random.Random) -> list[dict]:
+def seeded_systematic_draw(
+        rows: list[dict], n: int, rng: random.Random) -> list[dict]:
     """Every k-th row from a frame sorted on the stratification keys."""
     if n >= len(rows):
         return list(rows)
@@ -129,9 +130,9 @@ def main() -> None:
     unm = [r for r in pool if not r["monitored"]]
 
     picked = ([blank_row(r, "random-monitored")
-               for r in systematic(mon, a.n_monitored, rng)]
+               for r in seeded_systematic_draw(mon, a.n_monitored, rng)]
               + [blank_row(r, "random-unmonitored")
-                 for r in systematic(unm, a.n_unmonitored, rng)])
+                 for r in seeded_systematic_draw(unm, a.n_unmonitored, rng)])
     picked.sort(key=lambda r: (r["day"], r["agent"]))
 
     assert len({(r["agent"], r["day"]) for r in picked}) == len(picked), \
