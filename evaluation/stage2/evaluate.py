@@ -1,17 +1,14 @@
 """Run Stage 2's explain call on the golden windows and score it.
 
-    python3 -m evaluation.stage2.evaluate --dry            # payload sizes, no spend
-    python3 -m evaluation.stage2.evaluate --limit 2        # plumbing check, ~$2
-    python3 -m evaluation.stage2.evaluate                  # the baseline
+    python3 -m evaluation.stage2.evaluate --tag B-full --descriptor-tags B-full --dry
+    python3 -m evaluation.stage2.evaluate --tag B-full --descriptor-tags B-full --limit 2
+    python3 -m evaluation.stage2.evaluate --tag B-full --descriptor-tags B-full
 
-ISOLATES THE EXPLAIN CALL. The window comes from the golden label, so the
-backward walk is not involved and needs no Stage-1 coverage. That is
-deliberate: the walk is unvalidated, and with a bad window a bad judgement
-and a bad window score identically.
-
-It also makes the baseline CHEAP. The explain call needs digests (on disk),
-the block-stats strip (built by prep, free) and a window (in the label).
-Stage 1's day_activity -- the expensive part -- is the walk's input only.
+RUNS THE WHOLE THREE-PASS STAGE 2 PIPELINE. Explain runs first; a backward walk
+and revision run only when the response requests history or reports an
+activity that predates its detailed evidence. The labelled window bounds keep
+the evaluation cases comparable, while seed routing and every descriptor used
+by a walk come from the explicitly selected Stage-1 runs.
 
 WHAT REACHES THE JUDGE, AND WHAT DOES NOT. From the label: `agent` and the
 window bounds. Nothing else. Not `activity`, not `q1_activity_start`, not
@@ -30,6 +27,12 @@ other predicted episodes are reported but neither credited nor penalised.
 Negative labels are exhaustive window audits, so any predicted drift episode
 in one is a false positive. This asymmetry is deliberate: there is a target
 episode to match in a positive label and no target episode in a negative one.
+
+RESUME IS AN IDENTITY CHECK, not just an episode-id lookup. Every checkpoint
+row carries the evaluation contract fingerprint and Stage-2's per-window input
+fingerprint. `--resume` aborts if either differs, so changed prompts, labels,
+models, descriptors, evidence coverage or scoring code cannot be mixed into a
+single result file.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ import argparse
 import datetime
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -49,6 +53,53 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LABELS = str(paths.STAGE2_LABELS)
 OUT = str(paths.STAGE2_ARTIFACTS / "stage2_eval.jsonl")
 TARGETS = str(paths.STAGE2_GOLDENS / "episode_targets.json")
+EVALUATION_SCHEMA_VERSION = 2
+
+
+def _fingerprint(value):
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def evaluation_fingerprint(routing_tag, descriptor_snapshot, golden_cases,
+                           targets):
+    """Identity of the scoring experiment, independent of row selection."""
+    return _fingerprint({
+        "evaluation_schema_version": EVALUATION_SCHEMA_VERSION,
+        "routing_tag": routing_tag,
+        "descriptor_snapshot": descriptor_snapshot,
+        "stage2_schema_version": S.OUTPUT_SCHEMA_VERSION,
+        "judge_model": R.MODELS.get("judge"),
+        "prompts": {
+            name: hashlib.sha256(S.prompt(name).encode()).hexdigest()
+            for name in ("stage2", "walk", "stage2_revision")
+        },
+        "golden_cases": golden_cases,
+        "targets": targets,
+    })
+
+
+def validate_resume_rows(rows, selected_ids, experiment_fingerprint,
+                         input_fingerprints):
+    """Reject checkpoints produced by any other inputs or score contract."""
+    seen = set()
+    for row in rows:
+        episode_id = row.get("episode_id")
+        if episode_id in seen:
+            raise ValueError(f"duplicate resumed episode_id: {episode_id}")
+        seen.add(episode_id)
+        if episode_id not in selected_ids:
+            raise ValueError(
+                f"resumed episode {episode_id!r} is outside this selection")
+        if row.get("evaluation_fingerprint") != experiment_fingerprint:
+            raise ValueError(
+                f"resumed episode {episode_id!r} has a different evaluation "
+                "fingerprint")
+        if row.get("input_fingerprint") != input_fingerprints.get(episode_id):
+            raise ValueError(
+                f"resumed episode {episode_id!r} has different Stage-2 inputs")
+    return seen
 
 
 def _d(s):
@@ -276,9 +327,10 @@ def main():
                    help="JSONL destination (use a separate file for probes)")
     p.add_argument("--resume", action="store_true",
                    help="continue an interrupted --out file")
-    p.add_argument("--tag", default="B-peerfix")
+    p.add_argument("--tag", required=True,
+                   help="exact Stage-1 routing run tag")
     p.add_argument("--descriptor-tags",
-                   default=",".join(S.EVAL_DESCRIPTOR_TAGS),
+                   required=True,
                    help="comma-separated exact tags used by the walk index")
     a = p.parse_args()
     output_lock = lock_output(a.out) if not a.dry else None
@@ -292,8 +344,11 @@ def main():
     print(f"  routing tag: {a.tag}; descriptor snapshot: "
           f"{snapshot['days']} days {snapshot['fingerprint'][:12]} "
           f"{snapshot['sources']}")
-    cs = cases()
-    validate_episode_targets(cs, targets)
+    all_cases = cases()
+    validate_episode_targets(all_cases, targets)
+    experiment_fingerprint = evaluation_fingerprint(
+        a.tag, snapshot, all_cases, targets)
+    cs = list(all_cases)
     if a.only:
         pats = [x.strip() for x in a.only.split(",") if x.strip()]
         cs = [c for c in cs if any(p in c["episode_id"] for p in pats)]
@@ -310,14 +365,37 @@ def main():
     if a.limit:
         kept = kept[:a.limit]
 
+    windows_by_id = {
+        c["episode_id"]: {
+            "window_id": c["episode_id"], "agent": c["agent"],
+            "seed_days": c["routed_seed_days"],
+            "window": c["window"], "goal": None,
+        }
+        for c in kept
+    }
+    input_fingerprints = {
+        episode_id: S.input_fingerprint(window, runs)[0]
+        for episode_id, window in windows_by_id.items()
+    }
+
     print(f"  {len(kept)} episodes ({dropped} dropped by the selection rule)")
     rows = []
     if a.resume and os.path.exists(a.out):
         with open(a.out) as fh:
             rows = [json.loads(line) for line in fh if line.strip()]
+        try:
+            completed = validate_resume_rows(
+                rows, set(windows_by_id), experiment_fingerprint,
+                input_fingerprints)
+        except ValueError as exc:
+            raise SystemExit(
+                f"cannot resume {a.out}: {exc}. Use a new --out or restart "
+                "without --resume.") from exc
     elif not a.dry:
         write_rows(a.out, [])
-    completed = {row["episode_id"] for row in rows}
+        completed = set()
+    else:
+        completed = set()
     pending = [case for case in kept if case["episode_id"] not in completed]
     if completed:
         print(f"  resuming with {len(rows)} completed; {len(pending)} pending")
@@ -325,9 +403,7 @@ def main():
     sysmsg = S.prompt("stage2")
 
     for c in pending:
-        window = {"window_id": c["episode_id"], "agent": c["agent"],
-                  "seed_days": c["routed_seed_days"],
-                  "window": c["window"], "goal": None}
+        window = windows_by_id[c["episode_id"]]
         if a.dry:
             txt, prov = S.build_payload(window)
             est = int((len(sysmsg) + len(txt)) / 1.9)
@@ -383,6 +459,9 @@ def main():
                   f"truth={'drift' if c['truth']['is_drift'] else 'not  '} "
                   f"pred={len(scored_eps)} complete episode(s){match_note}")
         rows.append({"episode_id": c["episode_id"], "agent": c["agent"],
+                     "evaluation_schema_version": EVALUATION_SCHEMA_VERSION,
+                     "evaluation_fingerprint": experiment_fingerprint,
+                     "input_fingerprint": rec.get("input_fingerprint"),
                      "routing_tag": a.tag,
                      "descriptor_snapshot": snapshot,
                      "truth": c["truth"],

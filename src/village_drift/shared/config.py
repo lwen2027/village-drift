@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 
+from village_drift import paths
+
 # --- data location -----------------------------------------------------------
 # The gated HuggingFace dump. Override with VILLAGE_DATA=/path/to/dir
 DATA_DIR = os.environ.get("VILLAGE_DATA", os.path.expanduser("~/Documents/ai-village"))
@@ -239,7 +241,7 @@ def safe_agent(agent):
 # So the layouts stay as they are on disk -- renaming ~1,500 files buys
 # tidiness and risks the data -- but exactly one function knows them, and no
 # caller concatenates a path again.
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = str(paths.ROOT)
 
 # store -> (roots searched in order, stem template, extension)
 STORES = {

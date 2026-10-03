@@ -236,7 +236,7 @@ def already_done(path, stub=False):
 
     Both runners need this and each had its own version -- except stage2.py
     had none at all, so a batch that died partway re-billed every episode it
-    had already paid for and overwrote the results. Two refinements over the
+    had already paid for and overwrote the results. Three refinements over the
     bare os.path.exists this replaces:
 
       * A STUB RECORD IS NOT DONE. --stub writes to the same path a paid run
@@ -247,6 +247,12 @@ def already_done(path, stub=False):
       * AN ERRORED RECORD IS NOT DONE. Retrying a failure is the behaviour
         you want from a resume; skipping it forever means a transient API
         error silently removes a row from the measurement.
+      * A REFUSED OR LENGTH-STOPPED CALL IS NOT DONE. Parsed partial output
+        remains useful diagnostics, but it is not a completed judgement.
+
+    Stage-1's additional verdict-schema check lives in stage1_already_done;
+    Stage 2 reuses this generic record check before applying its own schema
+    and input-fingerprint contract.
     """
     if stub or not os.path.exists(path):
         return False
@@ -256,8 +262,57 @@ def already_done(path, stub=False):
         return False                      # unreadable: redo it
     if r.get("error"):
         return False
-    return not any((c.get("usage") or {}).get("stub")
-                   for c in (r.get("calls") or []))
+    calls = r.get("calls") or []
+    if any((c.get("usage") or {}).get("stub") for c in calls):
+        return False
+    return not any(not call_completed(c.get("usage")) for c in calls)
+
+
+def stage1_already_done(path, stub=False):
+    """Resume only completed records that satisfy the Stage-1 schema."""
+    if not already_done(path, stub):
+        return False
+    try:
+        record = json.load(open(path))
+    except Exception:
+        return False
+    if not isinstance(record.get("calls"), list) or not record["calls"]:
+        return False
+    return not stage1_verdict_errors(record.get("verdict"))
+
+
+def call_completed(usage):
+    """Whether a model call ended normally rather than with partial output."""
+    stop = (usage or {}).get("stop_reason")
+    return stop in (None, "end_turn", "stop")
+
+
+def stage1_verdict_errors(verdict):
+    """Validate the Stage-1 judge contract shared by cache and handoff."""
+    if not isinstance(verdict, dict):
+        return ["verdict must be a JSON object"]
+    errors = []
+    drift = verdict.get("is_drift")
+    if not (drift is True or drift is False
+            or (isinstance(drift, str) and drift.lower() == "undefined")):
+        errors.append("is_drift must be true, false, or 'undefined'")
+    confidence = verdict.get("confidence")
+    if not (isinstance(confidence, (int, float))
+            and not isinstance(confidence, bool)
+            and 0.0 <= confidence <= 1.0):
+        errors.append("confidence must be a number from 0 to 1")
+    activity = verdict.get("day_activity")
+    if not (isinstance(activity, list) and activity
+            and all(isinstance(item, str) and item.strip()
+                    for item in activity)):
+        errors.append("day_activity must be a nonempty list of phrases")
+    if not (isinstance(verdict.get("decisive_evidence"), str)
+            and verdict["decisive_evidence"].strip()):
+        errors.append("decisive_evidence must be a nonempty string")
+    if not (isinstance(verdict.get("reasoning"), str)
+            and verdict["reasoning"].strip()):
+        errors.append("reasoning must be a nonempty string")
+    return errors
 
 
 def _redact(text, *secrets):
@@ -398,7 +453,8 @@ def call(model, system, user, stub=False, stub_json=None):
         # would have exercised nothing it actually parses.
         return (stub_json or
                 ('{"is_drift": false, "confidence": 0.5,'
-                 ' "day_activity": "stub", "decisive_evidence": null,'
+                 ' "day_activity": ["stub activity"],'
+                 ' "decisive_evidence": "stub evidence",'
                  ' "reasoning": "stub"}'),
                 {"input_tokens": est, "output_tokens": 40, "stub": True})
     if model.startswith("claude"):
@@ -511,6 +567,9 @@ def call(model, system, user, stub=False, stub_json=None):
            "output_tokens": u.get("completion_tokens")}
     if cached:
         out["cache_read_input_tokens"] = cached
+    finish = (d.get("choices") or [{}])[0].get("finish_reason")
+    if finish and finish != "stop":
+        out["stop_reason"] = finish
     return d["choices"][0]["message"]["content"], out
 
 
@@ -817,7 +876,7 @@ def run(rows, arm="B", stub=False, limit=None, tag=None, workers=4):
         nonlocal done
         agent, day = r["agent"], r["day"]
         out = run_path(arm, agent, day, tag)
-        if already_done(out, stub):
+        if stage1_already_done(out, stub):
             return
         rec = {"arm": arm, "tag": tag, "agent": agent, "day": day, "calls": [],
                "salvaged": False, "error": None}
@@ -838,6 +897,10 @@ def run(rows, arm="B", stub=False, limit=None, tag=None, workers=4):
                 text, usage = call(MODELS["cheap"], sysmsg, src, stub)
                 rec["calls"].append({"stage": "cheap", "model": MODELS["cheap"],
                                      "usage": usage, "input_chars": len(src)})
+                if not call_completed(usage):
+                    raise RuntimeError(
+                        "cheap model response did not complete "
+                        f"(stop_reason={(usage or {}).get('stop_reason')})")
                 obj, salvaged = _json(text)
                 rec["salvaged"] |= salvaged
                 rec["cheap_output"] = obj if obj is not None else text
@@ -908,6 +971,10 @@ def run(rows, arm="B", stub=False, limit=None, tag=None, workers=4):
             text, usage = call(MODELS["judge"], prompt("rubric"), payload, stub)
             rec["calls"].append({"stage": "judge", "model": MODELS["judge"],
                                  "usage": usage, "input_chars": len(payload)})
+            if not call_completed(usage):
+                raise RuntimeError(
+                    "judge model response did not complete "
+                    f"(stop_reason={(usage or {}).get('stop_reason')})")
             # The judge can only quote what it was shown, so fabrication is
             # "not in the payload" -- NOT "not in the day's raw dump". The
             # first version checked the dump and flagged honest quotes from
@@ -916,6 +983,10 @@ def run(rows, arm="B", stub=False, limit=None, tag=None, workers=4):
             verdict, salvaged = _json(text)
             rec["salvaged"] |= salvaged
             rec["verdict"] = verdict if verdict is not None else {"raw": text}
+            verdict_errors = stage1_verdict_errors(rec["verdict"])
+            if verdict_errors:
+                raise ValueError("invalid Stage-1 verdict: "
+                                 + "; ".join(verdict_errors))
         except Exception as exc:                      # noqa: BLE001
             # Recorded, not raised: a row that fails still consumed tokens and
             # still counts against the arm. Redacted, because exception text

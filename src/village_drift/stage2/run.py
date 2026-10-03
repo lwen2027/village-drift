@@ -160,9 +160,19 @@ with nullable `corrected_within_evidence`. False now means the last supplied
 evidence still shows drift; null means the bounded evidence cannot determine
 even that and requires `correction` in `missing_evidence_for`.
 
-    python3 -m village_drift.stage2.run --window claude_haiku_4.5__2026-07-07 --stub
-    python3 -m village_drift.stage2.run --window claude_haiku_4.5__2026-07-07
-    python3 -m village_drift.stage2.run --all --limit 5
+STRICT OUTPUTS AND SOURCES: schema v9 validates every top-level and episode
+field before an answer can be final. Production and evaluation commands also
+require exact descriptor run tags; overlapping tags fail instead of allowing
+filename order to choose an experiment silently.
+
+COMPLETE MODEL TURNS: schema v10 rejects parsed JSON when the API stopped for
+`max_tokens` or any other non-success reason. The draft remains in the record
+for diagnosis but cannot trigger expansion, replace a prior verdict, or be
+scored as a finding.
+
+    python3 -m village_drift.stage2.run --window claude_haiku_4.5__2026-07-07 --descriptor-tags B-full --stub
+    python3 -m village_drift.stage2.run --window claude_haiku_4.5__2026-07-07 --descriptor-tags B-full
+    python3 -m village_drift.stage2.run --all --limit 5 --descriptor-tags B-full
 """
 from __future__ import annotations
 
@@ -173,7 +183,11 @@ import json
 import os
 import re
 from village_drift import paths
+import village_drift.shared.compress as compress_module
+import village_drift.shared.evidence as evidence_module
+import village_drift.shared.render as render_module
 from village_drift.shared.compress import evenly_spaced_sample
+from village_drift.shared.evidence import STAGE2_EVIDENCE
 from village_drift.stage1 import run as R
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -191,12 +205,12 @@ WINDOWS = str(paths.STAGE2_GOLDENS / "windows.jsonl")
 # The only Stage-1 arm anything downstream may read: hybrid B. See
 # _run_index for the two bugs that mixing arms has already caused.
 ARM_PREFIX = os.environ.get("ARENA_ARM_PREFIX", "B-")
-# Frozen descriptor sources for the current golden evaluation. Production
-# continues to read every usable arm-B record; eval scripts pass this tuple
-# explicitly so later runs cannot silently change a published measurement.
-EVAL_DESCRIPTOR_TAGS = ("B-walk35", "B-peerfix", "B-prtest")
 OUT = str(paths.STAGE2_ARTIFACTS / "explained")
-OUTPUT_SCHEMA_VERSION = 8
+OUTPUT_SCHEMA_VERSION = 10
+PAYLOAD_SOURCE_FILES = (
+    __file__, evidence_module.__file__, render_module.__file__,
+    compress_module.__file__,
+)
 
 
 def prompt(name="stage2"):
@@ -408,9 +422,8 @@ def _stop_at_gap(rows, max_gap=MAX_GAP_DAYS):
 def _run_index(tags=None):
     """(agent, day) -> day_activity threads, from Stage-1 arm B runs on disk.
 
-    When `tags` is supplied, only those exact run tags are eligible. This is
-    used by evaluations to freeze their inputs; production's default remains
-    every usable record under ARM_PREFIX.
+    Exact run tags are mandatory. An implicit "all B runs" index made results
+    depend on whichever experiments happened to coexist on disk.
 
     ARM B ONLY (ARM_PREFIX). This used to read every run file of any arm,
     with later files winning on collision -- and the old docstring noted
@@ -421,11 +434,14 @@ def _run_index(tags=None):
     other not. That is a structural difference, not resampling noise.
     Measured before the filter: 8 of 31 agents had mixed indices.
 
-    Collisions WITHIN arm B are still possible and still arbitrary -- same
-    agent-day under two B tags. That is resampling noise, and `source` on
-    each entry says which run won.
+    A duplicate agent-day across selected tags is rejected rather than
+    resolved by filename order.
     """
     import glob
+    tags = tuple(tags or ())
+    if not tags:
+        raise ValueError("descriptor run tags must be supplied explicitly")
+    allowed = set(tags)
     out = {}
     for f in sorted(glob.glob(os.path.join(R.RUNS, "*.json"))):
         try:
@@ -447,7 +463,7 @@ def _run_index(tags=None):
         # point; the alternative is remembering not to take it.
         source = os.path.basename(f)
         source_tag = source.split("__", 1)[0]
-        if tags is not None and source_tag not in tags:
+        if source_tag not in allowed:
             continue
         if not source.startswith(ARM_PREFIX):
             continue
@@ -474,7 +490,13 @@ def _run_index(tags=None):
             # disagreed on 9 of 17 episodes and changed the chosen anchor on
             # 4 of 16, i.e. the walk dated the wrong activity on a quarter
             # of episodes, scoring arm B's threads against arm A's evidence.
-            out[(r.get("agent"), r.get("day"))] = {
+            key = (r.get("agent"), r.get("day"))
+            if key in out:
+                raise ValueError(
+                    f"duplicate descriptor for {key[0]} {key[1]} in "
+                    f"{out[key]['source']} and {source}; select one run tag "
+                    "or consolidate the descriptor set")
+            out[key] = {
                 "threads": [str(x) for x in da],
                 "decisive_evidence": (r.get("verdict") or {}).get(
                     "decisive_evidence"),
@@ -606,6 +628,17 @@ def walk(window, stub=False, runs=None, request=None):
                          user, stub, stub_json=walk_stub)
     obj, salvaged = R._json(text)
     obj = obj if isinstance(obj, dict) else {}
+    stop = (usage or {}).get("stop_reason")
+    if not response_completed(stop):
+        return {
+            "error": f"walk model response did not complete ({stop})",
+            "stop_reason": stop,
+            "response_complete": False,
+            "draft": obj or None,
+            "salvaged": salvaged,
+            "usage": usage,
+            "raw": None if obj else text[:400],
+        }
     start = obj.get("activity_start_candidate")
     predecessor = obj.get("last_nonmatching_day")
     if start not in days:
@@ -643,6 +676,8 @@ def walk(window, stub=False, runs=None, request=None):
         # successful one if you only read the candidate date.
         "truncated": start_index == 0,
         "salvaged": salvaged,
+        "stop_reason": stop,
+        "response_complete": True,
         "usage": usage,
         "raw": None if obj else text[:400],
     }
@@ -865,7 +900,6 @@ def day_evidence(agent, day, include_reasoning=True):
     """
     rec, raw = _block_record(agent, day), _raw(agent, day)
     if rec and raw:
-        from village_drift.shared.evidence import STAGE2_EVIDENCE
         policy = (STAGE2_EVIDENCE if include_reasoning
                   else STAGE2_EVIDENCE.without_reasoning())
         return R.render_block(rec, raw, with_evidence=True,
@@ -917,12 +951,45 @@ def _artifact_signature(store, agent, day):
     return [stat.st_size, stat.st_mtime_ns]
 
 
+def _payload_contract():
+    """Code and policy identity for every representation Stage 2 can send."""
+    sources = {}
+    for source in PAYLOAD_SOURCE_FILES:
+        path = os.path.abspath(source)
+        name = os.path.relpath(path, str(paths.ROOT))
+        with open(path, "rb") as fh:
+            sources[name] = hashlib.sha256(fh.read()).hexdigest()
+    return {
+        "source_hashes": sources,
+        "limits": {
+            "walk_lookback": WALK_LOOKBACK,
+            "minimum_threads": MIN_THREADS,
+            "max_gap_days": MAX_GAP_DAYS,
+            "onset_reasoning_chars": ONSET_REASONING_CHARS,
+            "reasoning_days_max": REASONING_DAYS_MAX,
+            "reasoning_share": REASONING_SHARE,
+            "minimum_reasoning_chars": MIN_REASONING_CHARS,
+            "max_payload_tokens": MAX_PAYLOAD_TOKENS,
+            "chars_per_token_budget": CHARS_PER_TOKEN_BUDGET,
+            "explain_payload_chars": EXPLAIN_PAYLOAD_CHARS,
+            "reasoning_chars_total": REASONING_CHARS_TOTAL,
+            "digest_char_budget": DIGEST_CHAR_BUDGET,
+            "error_lines_max": ERROR_LINES_MAX,
+            "revision_payload_chars": REVISION_PAYLOAD_CHARS,
+            "revision_detail_days_max": REVISION_DETAIL_DAYS_MAX,
+            "revision_day_chars_max": REVISION_DAY_CHARS_MAX,
+        },
+        "evidence_policy": dict(vars(STAGE2_EVIDENCE)),
+    }
+
+
 def input_fingerprint(window, runs=None):
     """Fingerprint the inputs and evidence coverage that can affect a window.
 
     Returns (digest, summary). File size and nanosecond mtime make rebuilt
     artifacts invalidate the local resume cache without hashing multi-megabyte
-    raw days on every startup.
+    raw days on every startup. Small source files are hashed in full so a
+    renderer or compression change cannot reuse an answer to different text.
     """
     runs = runs if runs is not None else _run_index()
     agent = window["agent"]
@@ -960,18 +1027,13 @@ def input_fingerprint(window, runs=None):
         name: hashlib.sha256(prompt(name).encode()).hexdigest()
         for name in ("stage2", "walk", "stage2_revision")
     }
+    payload_contract = _payload_contract()
     material = {
-        "fingerprint_version": 1,
+        "fingerprint_version": 2,
         "schema_version": OUTPUT_SCHEMA_VERSION,
         "model": R.MODELS.get("judge"),
         "prompts": prompts,
-        "limits": {
-            "walk_lookback": WALK_LOOKBACK,
-            "max_gap_days": MAX_GAP_DAYS,
-            "explain_payload_chars": EXPLAIN_PAYLOAD_CHARS,
-            "revision_payload_chars": REVISION_PAYLOAD_CHARS,
-            "revision_detail_days": REVISION_DETAIL_DAYS_MAX,
-        },
+        "payload_contract": payload_contract,
         "window": {
             "window_id": window.get("window_id"),
             "agent": agent,
@@ -994,6 +1056,9 @@ def input_fingerprint(window, runs=None):
         "descriptor_latest": descriptors[-1]["day"] if descriptors else None,
         "artifact_days": len(artifacts),
         "artifact_sources": source_counts,
+        "payload_contract_fingerprint": hashlib.sha256(json.dumps(
+            payload_contract, sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest(),
     }
     return digest, summary
 
@@ -1441,6 +1506,8 @@ def episode_missing_fields(episode):
             add(field)
     elif supplied:
         add(supplied)
+    for field in _episode_schema_missing(episode):
+        add(field)
     if (episode.get("activity_start_supported") is not True
             or episode.get("activity_predates_window")):
         add("activity_start")
@@ -1451,6 +1518,129 @@ def episode_missing_fields(episode):
             and validation.get("complete") is not True):
         add("evidence")
     return missing
+
+
+def _nonempty_string(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _confidence(value):
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0.0 <= value <= 1.0)
+
+
+def response_completed(stop_reason):
+    """Whether the API says it finished the requested response normally."""
+    # R.call omits Anthropic's ordinary `end_turn` from usage. Tests and
+    # alternate callers may retain it, so both representations are success.
+    return stop_reason in (None, "end_turn")
+
+
+def _episode_schema_missing(episode):
+    """Return output-contract fields that are absent or malformed."""
+    if not isinstance(episode, dict):
+        return ["episode"]
+    missing = []
+
+    def require(condition, field):
+        if not condition and field not in missing:
+            missing.append(field)
+
+    require(_nonempty_string(episode.get("activity")), "activity")
+    require(isinstance(episode.get("activity_predates_window"), bool),
+            "activity_start")
+    require(isinstance(episode.get("activity_start_supported"), bool),
+            "activity_start")
+    if episode.get("activity_start_supported") is True:
+        require(bool(_SOURCE_DAY.fullmatch(
+            str(episode.get("activity_start") or ""))), "activity_start")
+    require(_nonempty_string(episode.get("activity_start_note")),
+            "activity_start")
+    require(isinstance(episode.get("onset_supported"), bool), "onset")
+    if episode.get("onset_supported") is True:
+        require(bool(_SOURCE_DAY.match(str(episode.get("onset") or ""))),
+                "onset")
+    require(_nonempty_string(episode.get("onset_note")), "onset")
+    require(isinstance(episode.get("missing_evidence_for"), list)
+            and all(_nonempty_string(x)
+                    for x in episode.get("missing_evidence_for", [])),
+            "missing_evidence_for")
+    require(episode.get("mechanism_shape") in {
+        "activity_changed", "assignment_changed", "relationship_changed"},
+        "mechanism")
+    require(_nonempty_string(episode.get("mechanism")), "mechanism")
+    require(isinstance(episode.get("available_levers"), list)
+            and all(_nonempty_string(x)
+                    for x in episode.get("available_levers", [])),
+            "available_levers")
+    correction = episode.get("corrected_within_evidence")
+    correction_valid = ("corrected_within_evidence" in episode
+                        and (correction is True or correction is False
+                             or correction is None))
+    corrected_at = episode.get("corrected_at")
+    if correction is True:
+        correction_valid = correction_valid and bool(
+            _SOURCE_DAY.fullmatch(str(corrected_at or "")))
+    else:
+        correction_valid = correction_valid and corrected_at is None
+    require(correction_valid
+            and _nonempty_string(episode.get("corrected_note")), "correction")
+    evidence_items = episode.get("evidence")
+    evidence_valid = (isinstance(evidence_items, list) and bool(evidence_items)
+                      and all(isinstance(item, dict)
+                              and bool(_SOURCE_DAY.fullmatch(
+                                  str(item.get("day") or "")))
+                              and _nonempty_string(item.get("quote"))
+                              for item in evidence_items))
+    require(evidence_valid, "evidence")
+    require(_nonempty_string(episode.get("dissent")), "dissent")
+    require(_confidence(episode.get("verdict_confidence")),
+            "verdict_confidence")
+    require(_confidence(episode.get("confidence")), "confidence")
+    return missing
+
+
+def validate_stage2_verdict(verdict):
+    """Validate the model response before it can become a stored finding.
+
+    Returns human-readable errors and records per-episode schema validation
+    beside the model output so completeness remains auditable.
+    """
+    if not isinstance(verdict, dict):
+        return ["verdict must be a JSON object"]
+    errors = []
+    examined = verdict.get("examined")
+    if not isinstance(examined, bool):
+        errors.append("examined must be true or false")
+    if not _nonempty_string(verdict.get("examined_note")):
+        errors.append("examined_note must be a non-empty string")
+    request = verdict.get("history_request")
+    if request is not None:
+        valid_request = (
+            isinstance(request, dict)
+            and _nonempty_string(request.get("activity"))
+            and bool(_SOURCE_DAY.fullmatch(str(request.get("anchor_day") or "")))
+            and _nonempty_string(request.get("reason")))
+        if not valid_request:
+            errors.append("history_request must be null or a complete request")
+    episodes = verdict.get("episodes")
+    if not isinstance(episodes, list):
+        errors.append("episodes must be a list")
+        return errors
+    if examined is False and episodes:
+        errors.append("examined=false cannot contain episodes")
+    for index, episode in enumerate(episodes):
+        missing = _episode_schema_missing(episode)
+        if isinstance(episode, dict):
+            episode["schema_validation"] = {
+                "complete": not missing,
+                "missing_fields": list(missing),
+            }
+        if missing:
+            errors.append(
+                f"episode {index} has missing or malformed fields: "
+                + ", ".join(missing))
+    return errors
 
 
 def validate_episode_corrections(verdict):
@@ -1504,6 +1694,7 @@ def explain(window, stub=False):
     obj = obj if isinstance(obj, dict) else {}
     validate_episode_corrections(obj)
     validate_episode_evidence(obj, payload, skip=stub)
+    schema_errors = validate_stage2_verdict(obj)
     # A refusal or a length stop is NOT an empty episode list. Both arrive
     # as absent/short text, and without this the record says "examined the
     # window, found no drift" about a call that never examined anything.
@@ -1511,7 +1702,9 @@ def explain(window, stub=False):
     return {"verdict": obj, "provenance": prov, "salvaged": salvaged,
             "usage": usage, "payload_chars": len(payload),
             "stop_reason": stop,
+            "response_complete": response_completed(stop),
             "refused": stop == "refusal",
+            "schema_errors": schema_errors,
             "raw": None if obj else text[:400]}
 
 
@@ -1721,7 +1914,16 @@ def build_revision_payload(window, initial, walked, runs):
         for day in history_sample_days:
             want(day, 3)
 
-    ordered = sorted(priorities, key=lambda day: (priorities[day], day))
+    # Required evidence owns capacity before contextual neighbours. The old
+    # priority-only sort could select start-1/start+1 while omitting a seed or
+    # cited boundary day, after which preflight correctly skipped a revision
+    # that the available evidence could actually have supported.
+    required_ordered = sorted(
+        required, key=lambda day: (priorities[day], day))
+    optional_ordered = sorted(
+        set(priorities) - required,
+        key=lambda day: (priorities[day], day))
+    ordered = required_ordered + optional_ordered
     chosen = ordered[:REVISION_DETAIL_DAYS_MAX]
     omitted = sorted(set(ordered) - set(chosen))
     draft = json.dumps(initial, ensure_ascii=False, indent=1, default=str)
@@ -1746,7 +1948,13 @@ def build_revision_payload(window, initial, walked, runs):
     # shrinking every one into illegibility.
     available = REVISION_PAYLOAD_CHARS - len(head)
     while len(chosen) > 1 and available // len(chosen) < 12_000:
-        omitted.append(chosen.pop())
+        optional_chosen = [day for day in chosen if day not in required]
+        if not optional_chosen:
+            break
+        victim = max(optional_chosen,
+                     key=lambda day: (priorities[day], day))
+        chosen.remove(victim)
+        omitted.append(victim)
     per_day = min(REVISION_DAY_CHARS_MAX,
                   max(4_000, available // max(1, len(chosen))))
     sections, missing, clipped = [], [], []
@@ -1858,12 +2066,15 @@ def revise(window, initial, walked, stub=False, runs=None):
     obj = obj if isinstance(obj, dict) else {}
     validate_episode_corrections(obj)
     validate_episode_evidence(obj, payload, skip=stub, boundary=walked)
+    schema_errors = validate_stage2_verdict(obj)
     preserved = preserve_complete_episodes(initial, obj)
     stop = (usage or {}).get("stop_reason")
     return {"verdict": obj, "provenance": provenance,
             "salvaged": salvaged, "usage": usage,
             "payload_chars": len(payload), "stop_reason": stop,
+            "response_complete": response_completed(stop),
             "refused": stop == "refusal", "raw": None if obj else text[:400],
+            "schema_errors": schema_errors,
             "skipped": False, "blockers": {},
             "preserved_complete_episodes": preserved}
 
@@ -1897,9 +2108,23 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
 
         # PASS 2: only for episodes the judge says start before its window.
         v0 = e["verdict"] if isinstance(e["verdict"], dict) else {}
+        initial_response_complete = e.get(
+            "response_complete", response_completed(e.get("stop_reason")))
+        initial_schema_errors = e.get("schema_errors")
+        if initial_schema_errors is None:
+            initial_schema_errors = validate_stage2_verdict(v0)
+        rec["initial_response_validation"] = {
+            "complete": (not initial_schema_errors
+                         and initial_response_complete),
+            "errors": initial_schema_errors,
+            "model_turn_complete": initial_response_complete,
+        }
+        initial_episodes = v0.get("episodes")
+        initial_episodes = (initial_episodes
+                            if isinstance(initial_episodes, list) else [])
         need_walk = [
             (index, episode)
-            for index, episode in enumerate(v0.get("episodes") or [])
+            for index, episode in enumerate(initial_episodes)
             if isinstance(episode, dict)
             and episode.get("activity_predates_window")
         ]
@@ -1916,7 +2141,8 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
         ]
         final = e
         rec["status"] = "final"
-        if (need_walk or history_request) and not e.get("refused"):
+        if ((need_walk or history_request) and not e.get("refused")
+                and initial_response_complete and not initial_schema_errors):
             walk_request = history_request
             if walk_request is None:
                 _, episode = need_walk[0]
@@ -1939,6 +2165,9 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
                     "salvaged": revision["salvaged"],
                     "raw": revision["raw"],
                     "stop_reason": revision["stop_reason"],
+                    "response_complete": revision.get(
+                        "response_complete",
+                        response_completed(revision.get("stop_reason"))),
                     "refused": revision["refused"],
                     "payload_chars": revision["payload_chars"],
                     "skipped": revision.get("skipped", False),
@@ -1951,9 +2180,21 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
                                          "model": R.MODELS["judge"],
                                          "usage": revision["usage"]})
                 revised = revision["verdict"]
+                revision_schema_errors = revision.get("schema_errors")
+                if revision_schema_errors is None:
+                    revision_schema_errors = validate_stage2_verdict(revised)
+                rec["revision"]["response_validation"] = {
+                    "complete": (not revision_schema_errors
+                                 and rec["revision"]["response_complete"]),
+                    "errors": revision_schema_errors,
+                    "model_turn_complete": rec["revision"][
+                        "response_complete"],
+                }
                 usable = (not revision["refused"]
                           and not revision.get("skipped")
+                          and rec["revision"]["response_complete"]
                           and revision["raw"] is None
+                          and not revision_schema_errors
                           and isinstance(revised.get("episodes"), list)
                           and revised.get("examined") is not None)
                 if usable:
@@ -1983,6 +2224,11 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
                     rec["status"] = "incomplete"
                     rec["missing_evidence_for"] = [
                         "post-walk revision did not return a usable answer"]
+                    if not rec["revision"]["response_complete"]:
+                        rec["revision_error"] = (
+                            "revision model response did not complete "
+                            f"(stop_reason={revision.get('stop_reason')})")
+                        rec["revision"]["draft_verdict"] = revised
             else:
                 rec["status"] = "incomplete"
                 rec["missing_evidence_for"] = [
@@ -2007,6 +2253,16 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
         # matters as much as in the payload: collapsed, a window nobody
         # could read scores identically to a clean one.
         v = final["verdict"]
+        final_response_complete = final.get(
+            "response_complete", response_completed(final.get("stop_reason")))
+        final_schema_errors = final.get("schema_errors")
+        if final_schema_errors is None:
+            final_schema_errors = validate_stage2_verdict(v)
+        rec["response_validation"] = {
+            "complete": not final_schema_errors and final_response_complete,
+            "errors": final_schema_errors,
+            "model_turn_complete": final_response_complete,
+        }
         remaining_history_request = _history_request(v)
         eps = v.get("episodes")
         eps = eps if isinstance(eps, list) else []
@@ -2019,6 +2275,13 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
         complete_episodes = 0
         missing_kinds = set()
         for index, episode in enumerate(eps):
+            if not final_response_complete and isinstance(episode, dict):
+                missing = episode.get("missing_evidence_for")
+                if not isinstance(missing, list):
+                    missing = []
+                    episode["missing_evidence_for"] = missing
+                if "model_response" not in missing:
+                    missing.append("model_response")
             if (isinstance(episode, dict)
                     and str(episode.get("activity")) in unexpanded_by_activity):
                 missing = episode.get("missing_evidence_for")
@@ -2066,6 +2329,14 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
         if v.get("examined") is not True:
             rec.setdefault("missing_evidence_for", []).append(
                 "Stage 2 reported that the supplied evidence was insufficient")
+        if final_schema_errors:
+            rec.setdefault("missing_evidence_for", []).append(
+                "Stage 2 response violated the output schema: "
+                + "; ".join(final_schema_errors))
+        if not final_response_complete:
+            rec.setdefault("missing_evidence_for", []).append(
+                "Stage 2 model response did not complete "
+                f"(stop_reason={final.get('stop_reason')})")
 
         unresolved = bool(
             rec.get("missing_evidence_for")
@@ -2118,6 +2389,12 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
             rec["status"] = "incomplete"
             rec["error"] = ("explain returned unparseable output; the text is "
                             "in explain_raw. This window has NO verdict.")
+        elif not initial_response_complete:
+            rec["status"] = "incomplete"
+            rec["error"] = (
+                "explain model response did not complete "
+                f"(stop_reason={e.get('stop_reason')}); parsed output is a "
+                "draft and must not be scored.")
     # SystemExit, not just Exception. run.py raises it for an over-cap
     # payload, and one oversized window was killing the whole batch
     # sixteen windows in. A per-window failure belongs in that window's
@@ -2175,7 +2452,14 @@ def main():
                     help="build the payload and report its size, then stop")
     ap.add_argument("--rerun", action="store_true",
                     help="ignore matching Stage-2 cache records")
+    ap.add_argument(
+        "--descriptor-tags", required=True,
+        help="comma-separated exact Stage-1 tags used for descriptors")
     a = ap.parse_args()
+    descriptor_tags = tuple(
+        tag.strip() for tag in a.descriptor_tags.split(",") if tag.strip())
+    if not descriptor_tags:
+        raise SystemExit("--descriptor-tags requires at least one exact tag")
 
     windows, src = load_windows()
     if a.window:
@@ -2188,7 +2472,7 @@ def main():
         windows = windows[:a.limit]
 
     if a.dry:
-        runs = _run_index()
+        runs = _run_index(descriptor_tags)
         sysmsg = prompt("stage2")
         worst = 0
         for window in windows:
@@ -2210,7 +2494,7 @@ def main():
         return
 
     os.makedirs(OUT, exist_ok=True)
-    runs = _run_index()
+    runs = _run_index(descriptor_tags)
     total = 0.0
     done = 0
     for i, window in enumerate(windows, 1):

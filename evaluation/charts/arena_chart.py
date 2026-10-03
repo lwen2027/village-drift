@@ -217,10 +217,11 @@ def svg():
     for a in ("D", "C", "B", "0", "A"):
         x, y = px(xval[a]), py(ACC[a])
         est = a == "0"
+        dash = 'stroke-dasharray="4 3"' if est else ""
         s.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{11 if a=="A" else 9}" '
                  f'fill="{"none" if est else colour[a]}" stroke="{colour[a]}" '
                  f'stroke-width="{2.5 if est else 1}" '
-                 f'{"stroke-dasharray=\'4 3\'" if est else ""}/>')
+                 f'{dash}/>')
         # A and B tie on accuracy and sit within 9% on cost, so their markers
         # nearly overlap. Separate the labels VERTICALLY and keep both to the
         # right: an earlier version put A's label to the LEFT, where it ran

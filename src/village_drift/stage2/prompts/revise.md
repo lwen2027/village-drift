@@ -17,9 +17,13 @@ object, not a patch. You may remove, split, or add episodes.
 
 Evidence must use the structured `{day, quote}` form and be copied from the
 detailed source excerpts for that named day. The initial draft, backward walk
-and compact spine are not quotable sources. If clipping, missing days, or
-omitted boundary candidates prevent a supported conclusion, set `examined`
-false and name exactly what is missing in `examined_note`.
+and compact spine are not quotable sources. Keep `examined` true when clipping,
+missing days, or omitted boundary candidates affect only one activity. Retain
+that activity as an incomplete episode and name each unresolved field in its
+`missing_evidence_for`. Set `examined` false only when a problem affects the
+whole window, such as an unreadable goal or unusable detailed evidence for
+every candidate. Uncertainty about the expanded activity must not discard a
+separately supported episode.
 
 The walk's `activity_start_candidate` is a locator, not a fact. Set
 `activity_start_supported` true only when the detailed source for that day
@@ -30,6 +34,9 @@ candidate only as an observed lower bound, set `activity_start_supported`
 false, and include `"activity_start"` in `missing_evidence_for`. Do not replace
 the candidate with another supposedly supported date from the compact spine.
 
-This is the only expansion. Return `history_request: null`. If the expanded
-evidence is still insufficient, use `examined: false`; do not request another
-walk.
+This is the only expansion; the runner will not perform another walk. Return
+`history_request: null` when the expanded candidate is resolved. If it remains
+too uncertain to report even as an incomplete drift episode, repeat the
+incoming `history_request` unchanged as an unresolved-candidate marker. That
+marker records incompleteness; it does not request recursion. Do not invent a
+different activity or anchor.

@@ -173,6 +173,15 @@ def test_revision_treats_walk_boundary_as_a_locator():
     assert "cite exact excerpts from both days" in sent
 
 
+def test_revision_keeps_local_uncertainty_episode_scoped():
+    sent = " ".join(S.prompt("stage2_revision").lower().split())
+    assert "set `examined` false only when a problem affects the whole window" \
+        in sent
+    assert "retain that activity as an incomplete episode" in sent
+    assert "repeat the incoming `history_request` unchanged" in sent
+    assert "the runner will not perform another walk" in sent
+
+
 def test_stage2_allows_supported_episodes_beside_one_history_request():
     sent = " ".join(S.prompt("stage2").lower().split())
     assert "keep any separately supported drift episodes" in sent

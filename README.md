@@ -180,16 +180,19 @@ paying for Stage 2:
 python3 -m village_drift.handoff.pipeline validate --tag B-full --rows full
 ```
 
-The command exits nonzero until every expected active day has a successful
-Arm-B result, a list-form `day_activity`, a current deterministic block and raw
-evidence. It also prints per-window missing descriptor, block and evidence
+The command exits nonzero until every expected active day has a normally
+completed Arm-B call, a valid drift verdict and confidence, a list-form
+`day_activity`, a current deterministic block and raw evidence. It also prints
+per-window missing descriptor, block and evidence
 dates, plus warnings when the expected row set itself contains too little
 contiguous history for a backward walk.
 
 Stage 2 cache entries are tied to an input-coverage fingerprint, so completing
-that backfill automatically reruns affected windows. Pass `--rerun` to
-`python3 -m village_drift.stage2.run` to force a fresh judgement even when
-the fingerprint matches.
+that backfill automatically reruns affected windows. Run
+`python3 -m village_drift.stage2.run --all --descriptor-tags B-full --rerun`
+to force a fresh judgement even when the fingerprint matches. Stage 2 and evaluation
+commands require exact routing and descriptor tags; archived experiments are
+never selected implicitly.
 
 Archived pre-overhaul run `B-peerfix`, 93 scorable rows of 100:
 

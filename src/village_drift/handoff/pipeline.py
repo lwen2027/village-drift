@@ -5,9 +5,9 @@ arena_runs/ and Stage 2 read episodes_mechanical.jsonl, and nothing joined
 them: the selection rule lived only as prose in README.md, and the window
 builder lived only in a conversation. Both are here now.
 
-    python3 -m village_drift.handoff.pipeline days
-    python3 -m village_drift.handoff.pipeline windows
-    python3 -m village_drift.handoff.pipeline --write
+    python3 -m village_drift.handoff.pipeline days --tag B-full
+    python3 -m village_drift.handoff.pipeline windows --tag B-full
+    python3 -m village_drift.handoff.pipeline --write --tag B-full
     python3 -m village_drift.handoff.pipeline validate --tag B-full --rows full
 
 `validate` is the paid-Stage-2 gate. The named row set is the manifest of
@@ -102,7 +102,7 @@ def _drift_value(value):
     raise ValueError(f"invalid Stage-1 is_drift value: {value!r}")
 
 
-def verdicts(tag="B-peerfix"):
+def verdicts(tag):
     """Every Stage-1 verdict for `tag`, keyed (agent, day).
 
     Reads arena_runs/ directly rather than a scored table. Open-goal verdicts
@@ -123,7 +123,7 @@ def verdicts(tag="B-peerfix"):
                for c in (r.get("calls") or [])):
             continue
         v = r.get("verdict") or {}
-        if v.get("is_drift") is None or v.get("confidence") is None:
+        if R.stage1_verdict_errors(v):
             continue
         drift = _drift_value(v["is_drift"])
         out[(r.get("agent"), r.get("day"))] = {
@@ -254,11 +254,17 @@ def _stage1_run_states(tag):
         elif any((call.get("usage") or {}).get("stub")
                  for call in (rec.get("calls") or [])):
             state, detail = "stub", "stub usage marker present"
+        elif not isinstance(rec.get("calls"), list) or not rec["calls"]:
+            state, detail = "incomplete_call", "no recorded model call"
+        elif any(not R.call_completed(call.get("usage"))
+                 for call in rec["calls"]):
+            state, detail = "incomplete_call", (
+                "one or more model calls did not complete normally")
         else:
-            activity = (rec.get("verdict") or {}).get("day_activity")
-            if not isinstance(activity, list) or not activity:
-                state = "invalid_descriptor"
-                detail = f"day_activity is {type(activity).__name__}, not a nonempty list"
+            verdict_errors = R.stage1_verdict_errors(rec.get("verdict"))
+            if verdict_errors:
+                state = "invalid_verdict"
+                detail = "; ".join(verdict_errors)
         out[key] = {"state": state, "path": path,
                     "detail": detail, "record": rec}
     return out
@@ -378,8 +384,8 @@ def print_readiness(report, details=50):
     print(f"Stage 1 -> Stage 2: {verdict}")
     print(f"  tag={report['tag']}  expected={report['expected_days']}  "
           f"usable={report['usable_runs']}  windows={len(report['windows'])}")
-    order = ["missing_run", "error", "stub", "invalid_descriptor",
-             "invalid_record", "unreadable", "missing_block",
+    order = ["missing_run", "error", "stub", "incomplete_call",
+             "invalid_verdict", "invalid_record", "unreadable", "missing_block",
              "unreadable_block", "stale_block", "missing_raw"]
     for name in order:
         _print_items(name.replace("_", " "),
@@ -418,7 +424,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("cmd", choices=["days", "windows", "validate"], nargs="?",
                    default="windows")
-    p.add_argument("--tag", default="B-peerfix")
+    p.add_argument("--tag", required=True,
+                   help="exact Stage-1 run tag; archived runs are never implicit")
     p.add_argument("--rows", help="expected row-set name or JSONL path; required by validate")
     p.add_argument("--details", type=int, default=50,
                    help="maximum dates per validation category; 0 prints all")

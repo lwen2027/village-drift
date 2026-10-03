@@ -126,8 +126,9 @@ python3 -m village_drift.handoff.pipeline validate --tag B-full --rows full
 
 The row set is the manifest of active agent-days Stage 1 was expected to
 process. The validator exits nonzero and names exact dates for missing or
-failed runs, invalid `day_activity`, missing/stale blocks and missing raw
-evidence. For each resulting Stage 2 window it also reports expected versus
+failed or length-stopped calls, invalid verdict/confidence/`day_activity`,
+missing/stale blocks and missing raw evidence. For each resulting Stage 2
+window it also reports expected versus
 contiguous descriptor depth and the precise missing descriptor, block and
 evidence days. This explicit manifest is necessary: without it, an unprocessed
 day is indistinguishable from a genuinely inactive day. A sparse row set is
@@ -263,11 +264,24 @@ The initial answer is retained: any separately complete episodes make the
 result `partial`, while a window with no complete finding remains `incomplete`.
 
 Stage 2 resume records carry an `input_fingerprint`. It covers the window and
-seed contract, effective prompts and judge model, descriptor contents, limits,
-and block/raw/digest file state across the possible walk range. A new Stage-1
-descriptor or backfilled evidence artifact therefore invalidates an older
-cached result automatically. `--rerun` remains available when an intentional
-fresh judgement is wanted despite identical inputs.
+seed contract, effective prompts and judge model, descriptor contents, every
+payload-shaping limit and evidence policy, hashes of the rendering/compression
+source, and block/raw/digest file state across the possible walk range. A code
+change, new Stage-1 descriptor or backfilled evidence artifact therefore
+invalidates an older cached result automatically. `--rerun` remains available
+when an intentional fresh judgement is wanted despite identical inputs.
+
+The golden evaluator applies the same rule to `--resume`: every checkpoint row
+must match the current evaluation fingerprint and its window's Stage-2 input
+fingerprint. The former covers routing, descriptors, labels, targets, model,
+prompts, schemas and scoring-contract version; the latter covers local evidence
+files and coverage. A mismatch aborts rather than combining experiments.
+
+All handoff, Stage 2, and evaluation commands require explicit Stage-1 run
+tags. For example, use `--tag B-full` for routing and
+`--descriptor-tags B-full` for the descriptor spine. Selecting multiple tags
+that contain the same agent-day is rejected; experiment filename order is not
+part of the pipeline contract.
 
 ### Archived measurement (superseded 2026-10-02)
 

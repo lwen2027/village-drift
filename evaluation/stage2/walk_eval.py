@@ -1,7 +1,7 @@
 """Score the backward walk against the golden set's activity_start.
 
-    python3 -m evaluation.stage2.walk_eval --dry     # what it would anchor on, no API calls
-    python3 -m evaluation.stage2.walk_eval           # run the walks (~$0.04 each)
+    python3 -m evaluation.stage2.walk_eval --tag B-full --descriptor-tags B-full --dry
+    python3 -m evaluation.stage2.walk_eval --tag B-full --descriptor-tags B-full
 
 WHAT THIS MEASURES, AND WHAT IT DOES NOT. Only the walk: given a window and
 Stage 1's verdicts inside it, does it locate the `activity_start_candidate`
@@ -94,10 +94,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dry", action="store_true")
     p.add_argument("--limit", type=int)
-    p.add_argument("--tag", default="B-peerfix",
+    p.add_argument("--tag", required=True,
                    help="exact Stage-1 run tag used for seed routing")
     p.add_argument("--descriptor-tags",
-                   default=",".join(S.EVAL_DESCRIPTOR_TAGS),
+                   required=True,
                    help="comma-separated exact tags used by the walk index")
     a = p.parse_args()
 

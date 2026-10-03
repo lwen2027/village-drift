@@ -52,6 +52,33 @@ def _block_record(agent="A B", day="2026-07-01"):
             "context": {}}
 
 
+def _stage2_episode(**updates):
+    episode = {
+        "activity": "supported activity",
+        "activity_start": "2026-01-08",
+        "activity_predates_window": False,
+        "activity_start_supported": True,
+        "activity_start_note": "boundary is visible",
+        "onset": "2026-01-09",
+        "onset_supported": True,
+        "onset_note": "transition is visible",
+        "missing_evidence_for": [],
+        "mechanism_shape": "activity_changed",
+        "mechanism": "The activity changed.",
+        "available_levers": [],
+        "corrected_within_evidence": False,
+        "corrected_at": None,
+        "corrected_note": "No correction appears by the evidence end.",
+        "evidence": [{"day": "2026-01-09", "quote": "supported"}],
+        "evidence_validation": {"complete": True},
+        "dissent": "The activity may still serve the goal.",
+        "verdict_confidence": 0.8,
+        "confidence": 0.7,
+    }
+    episode.update(updates)
+    return episode
+
+
 # ------------------------------------------------------- paths and naming --
 def test_every_store_round_trips_through_one_helper():
     """Three stores spell (agent, day) three ways. Exactly one place knows."""
@@ -64,6 +91,18 @@ def test_every_store_round_trips_through_one_helper():
     # and every one is derived from the same sanitised name, never hand-built
     for p in seen.values():
         assert config.safe_agent(a) in p
+
+
+def test_artifact_paths_are_anchored_at_the_repository_root():
+    assert config._ROOT == ROOT
+    assert config.artifact_path("block", "a", "2026-01-01").startswith(
+        os.path.join(ROOT, "artifacts") + os.sep)
+
+
+def test_arena_chart_parses_on_the_declared_python_minimum():
+    path = os.path.join(ROOT, "evaluation", "charts", "arena_chart.py")
+    with open(path) as fh:
+        compile(fh.read(), path, "exec")
 
 
 def test_agent_names_with_punctuation_cannot_diverge():
@@ -112,7 +151,12 @@ def test_undefined_is_preserved_and_never_selected(tmp_path, monkeypatch):
     """
     rec = {"agent": "a", "day": "2026-01-01", "error": None,
            "calls": [{"usage": {"input_tokens": 1}}],
-           "verdict": {"is_drift": "undefined", "confidence": 0.99}}
+           "verdict": {
+               "is_drift": "undefined", "confidence": 0.99,
+               "day_activity": ["open-ended exploration"],
+               "decisive_evidence": "the goal is open",
+               "reasoning": "Drift is undefined for an open goal.",
+           }}
     (tmp_path / "B-test__a.json").write_text(json.dumps(rec))
     monkeypatch.setattr(P.R, "RUNS", str(tmp_path))
     got = P.verdicts("B-test")
@@ -240,6 +284,39 @@ def test_stage2_eval_checkpoint_round_trips_rows(tmp_path):
     assert not list(tmp_path.glob("*.tmp.*"))
 
 
+def test_evaluation_fingerprint_covers_routing_descriptors_and_truth():
+    snapshot = {"fingerprint": "descriptors", "days": 1,
+                "sources": {"B-full": 1}}
+    cases = [{"episode_id": "e", "truth": {"is_drift": True}}]
+    targets = {"e": {"activity_anchor_groups": [["site"]]}}
+    base = E.evaluation_fingerprint("B-full", snapshot, cases, targets)
+    assert base != E.evaluation_fingerprint(
+        "B-other", snapshot, cases, targets)
+    assert base != E.evaluation_fingerprint(
+        "B-full", {**snapshot, "fingerprint": "changed"}, cases, targets)
+    assert base != E.evaluation_fingerprint(
+        "B-full", snapshot,
+        [{"episode_id": "e", "truth": {"is_drift": False}}], targets)
+
+
+def test_evaluation_resume_requires_matching_experiment_and_inputs():
+    row = {"episode_id": "e", "evaluation_fingerprint": "experiment",
+           "input_fingerprint": "inputs"}
+    assert E.validate_resume_rows(
+        [row], {"e"}, "experiment", {"e": "inputs"}) == {"e"}
+    for changed in (
+            {**row, "evaluation_fingerprint": "old"},
+            {**row, "input_fingerprint": "old"},
+            {"episode_id": "e"}):
+        try:
+            E.validate_resume_rows(
+                [changed], {"e"}, "experiment", {"e": "inputs"})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("an incompatible checkpoint must fail closed")
+
+
 # ------------------------------------------------------ window construction --
 def test_window_has_one_structured_seed_field():
     """Routing distinctions are provenance on each seed, not competing lists."""
@@ -262,7 +339,9 @@ def test_stage1_readiness_names_missing_descriptor_days(tmp_path, monkeypatch):
         "agent": "a", "day": "2026-01-02", "error": None,
         "calls": [{"usage": {"input_tokens": 1}}],
         "verdict": {"is_drift": True, "confidence": 0.9,
-                    "day_activity": ["build site"]},
+                    "day_activity": ["build site"],
+                    "decisive_evidence": "built the site",
+                    "reasoning": "The work departed from the goal."},
     }
     (tmp_path / "B-full__a__2026-01-02.json").write_text(json.dumps(run))
     block = tmp_path / "block.json"
@@ -279,6 +358,32 @@ def test_stage1_readiness_names_missing_descriptor_days(tmp_path, monkeypatch):
     assert report["issues"]["missing_run"] == [
         (("a", "2026-01-01"), None)]
     assert report["windows"][0]["missing_descriptors"] == ["2026-01-01"]
+
+
+def test_stage1_readiness_rejects_descriptor_without_routing_verdict(
+        tmp_path, monkeypatch):
+    record = {
+        "agent": "a", "day": "2026-01-01", "error": None,
+        "calls": [{"usage": {"input_tokens": 1}}],
+        "verdict": {
+            "day_activity": ["build site"],
+            "decisive_evidence": "site build",
+            "reasoning": "The work may serve the goal.",
+        },
+    }
+    (tmp_path / "B-full__a__2026-01-01.json").write_text(
+        json.dumps(record))
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text(json.dumps({
+        "feature_version": config.FEATURE_VERSION}))
+    monkeypatch.setattr(P.R, "RUNS", str(tmp_path))
+    monkeypatch.setattr(P.config, "find_artifact",
+                        lambda *args: str(artifact))
+    report = P.stage1_readiness("B-full", {
+        ("a", "2026-01-01"): {"agent": "a", "day": "2026-01-01"}})
+    assert report["ready"] is False
+    assert report["windows"] == []
+    assert "is_drift" in report["issues"]["invalid_verdict"][0][1]
 
 
 def test_seed_routing_metadata_is_withheld_from_stage2(monkeypatch):
@@ -436,6 +541,42 @@ def test_a_clean_negative_is_distinguishable_from_a_refusal(monkeypatch):
     assert out["verdict"]["episodes"] == []
 
 
+def test_length_stopped_explain_is_a_draft_not_a_finding(monkeypatch):
+    reply = json.dumps({"examined": True, "examined_note": "parsed draft",
+                        "history_request": None, "episodes": []})
+    monkeypatch.setattr(R, "call", lambda *a, **k: (
+        reply, {"input_tokens": 1, "stop_reason": "max_tokens"}))
+    monkeypatch.setattr(S, "build_payload", lambda *a, **k: ("payload", {}))
+    out = S.explain({"agent": "a", "seed_days": [_seed("2026-01-01")]})
+    assert out["verdict"]["examined"] is True
+    assert out["response_complete"] is False
+    assert out["stop_reason"] == "max_tokens"
+
+
+def test_length_stopped_explain_cannot_trigger_walk_or_score(monkeypatch):
+    verdict = {"examined": True, "examined_note": "truncated",
+               "history_request": None,
+               "episodes": [_stage2_episode(
+                   activity="draft", activity_predates_window=True,
+                   activity_start_supported=False,
+                   missing_evidence_for=["activity_start"])]}
+    monkeypatch.setattr(S, "explain", lambda *a, **k: {
+        "verdict": verdict, "provenance": {}, "salvaged": False,
+        "usage": {"stop_reason": "max_tokens"}, "payload_chars": 1,
+        "stop_reason": "max_tokens", "response_complete": False,
+        "refused": False, "raw": None,
+    })
+    monkeypatch.setattr(S, "walk", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("a truncated explain response must not trigger walk")))
+    out = S.run_window({
+        "window_id": "w", "agent": "a", "seed_days": [_seed("2026-01-10")]
+    }, runs={})
+    assert out["status"] == "incomplete"
+    assert out["n_complete_episodes"] == 0
+    assert "model_response" in out["episodes"][0]["missing_evidence_for"]
+    assert "must not be scored" in out["error"]
+
+
 def test_already_done_rejects_stub_and_error_records(tmp_path):
     """--stub writes to the path a paid run uses. A stub record counted as
     done makes the real run skip that row forever."""
@@ -446,10 +587,44 @@ def test_already_done_rejects_stub_and_error_records(tmp_path):
     paid = w("a.json", {"calls": [{"usage": {"input_tokens": 1}}], "error": None})
     stub = w("b.json", {"calls": [{"usage": {"stub": True}}], "error": None})
     err = w("c.json", {"calls": [{"usage": {}}], "error": "boom"})
+    refused = w("d.json", {
+        "calls": [{"usage": {"stop_reason": "refusal"}}], "error": None})
     assert R.already_done(paid) is True
     assert R.already_done(stub) is False
     assert R.already_done(err) is False, "a failure must be retried, not skipped"
+    assert R.already_done(refused) is False
     assert R.already_done(paid, stub=True) is False
+
+
+def test_stage1_resume_requires_a_complete_verdict(tmp_path):
+    valid = {
+        "is_drift": False, "confidence": 0.9,
+        "day_activity": ["build site"],
+        "decisive_evidence": "site build",
+        "reasoning": "The work served the assigned goal.",
+    }
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"calls": [{"usage": {}}], "error": None,
+                                "verdict": valid}))
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"calls": [{"usage": {}}], "error": None,
+                               "verdict": {"day_activity": ["build site"]}}))
+    assert R.stage1_already_done(str(good)) is True
+    assert R.stage1_already_done(str(bad)) is False
+
+
+def test_stage1_records_final_refusal_as_retryable_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "RUNS", str(tmp_path))
+    monkeypatch.setattr(R, "arm_input", lambda *args: "payload")
+    monkeypatch.setattr(R, "prompt", lambda *args: "prompt")
+    monkeypatch.setattr(R, "call", lambda *args, **kwargs: (
+        "", {"input_tokens": 1, "stop_reason": "refusal"}))
+    R.run([{"agent": "a", "day": "2026-01-01"}], arm="A",
+          tag="refusal", workers=1)
+    path = R.run_path("A", "a", "2026-01-01", "refusal")
+    record = json.loads(open(path).read())
+    assert "did not complete" in record["error"]
+    assert R.stage1_already_done(path) is False
 
 
 def test_stage2_resume_rejects_legacy_episode_records(tmp_path):
@@ -495,6 +670,27 @@ def test_input_fingerprint_changes_when_descriptor_coverage_changes(monkeypatch)
     assert summary_backfilled["artifact_sources"]["blockrec"] == 1
 
 
+def test_input_fingerprint_covers_payload_code_and_limits(tmp_path, monkeypatch):
+    source = tmp_path / "renderer.py"
+    source.write_text("version = 1\n")
+    monkeypatch.setattr(S, "PAYLOAD_SOURCE_FILES", (str(source),))
+    monkeypatch.setattr(S, "_artifact_signature", lambda *args: None)
+    window = {
+        "window_id": "w", "agent": "a",
+        "seed_days": [_seed("2026-01-10")],
+        "back_to": "2026-01-10", "forward_to": "2026-01-10",
+    }
+    before, summary = S.input_fingerprint(window, {})
+    source.write_text("version = 2\n")
+    code_changed, _ = S.input_fingerprint(window, {})
+    assert before != code_changed
+    assert summary["payload_contract_fingerprint"]
+
+    monkeypatch.setattr(S, "ERROR_LINES_MAX", S.ERROR_LINES_MAX + 1)
+    limit_changed, _ = S.input_fingerprint(window, {})
+    assert code_changed != limit_changed
+
+
 def test_missing_day_is_reported_not_dropped():
     """A day with no evidence must be distinguishable from an idle day."""
     txt, src = S.day_evidence("Nobody At All", "1999-01-01")
@@ -507,8 +703,36 @@ def test_descriptor_index_is_single_arm():
     of 17 episodes. Arm A is always the one available when coverage is thin,
     which is exactly when a polluted index does most harm."""
     assert S.ARM_PREFIX == "B-"
-    for v in S._run_index().values():
-        assert v["source"].startswith("B-"), v["source"]
+    try:
+        S._run_index()
+    except ValueError as exc:
+        assert "supplied explicitly" in str(exc)
+    else:
+        raise AssertionError("an implicit mixed-experiment index must fail")
+
+
+def test_descriptor_index_uses_only_exact_tags_and_rejects_collisions(
+        tmp_path, monkeypatch):
+    def write(tag, day, thread):
+        record = {
+            "agent": "a", "day": day, "error": None, "calls": [],
+            "verdict": {"day_activity": [thread],
+                        "decisive_evidence": thread},
+        }
+        (tmp_path / f"{tag}__a__{day}.json").write_text(json.dumps(record))
+
+    write("B-final", "2026-01-01", "final")
+    write("B-probe", "2026-01-02", "probe")
+    monkeypatch.setattr(R, "RUNS", str(tmp_path))
+    assert set(S._run_index(("B-final",))) == {("a", "2026-01-01")}
+
+    write("B-probe", "2026-01-01", "conflict")
+    try:
+        S._run_index(("B-final", "B-probe"))
+    except ValueError as exc:
+        assert "duplicate descriptor" in str(exc)
+    else:
+        raise AssertionError("overlapping experiment tags must not silently win")
 
 
 def test_anchor_prefers_a_positive_route_seed():
@@ -596,17 +820,9 @@ def test_revision_packet_is_bounded_and_contains_boundary_days(monkeypatch):
     }
     initial = {"examined": True, "episodes": [{
         "activity": "x", "activity_predates_window": True,
-        "onset": "2026-01-10"}, {
-        "activity": "already supported",
-        "activity_start": "2026-01-09",
-        "activity_start_supported": True,
-        "activity_predates_window": False,
-        "onset": "2026-01-10",
-        "onset_supported": True,
-        "missing_evidence_for": [],
-        "evidence": [{"day": "2026-01-09", "quote": "supported"}],
-        "evidence_validation": {"complete": True},
-    }]}
+        "onset": "2026-01-10"}, _stage2_episode(
+            activity="already supported", activity_start="2026-01-09",
+            onset="2026-01-10")]}
     payload, provenance = S.build_revision_payload(
         window, initial, {
             "activity_start_candidate": "2026-01-01",
@@ -625,6 +841,29 @@ def test_revision_packet_is_bounded_and_contains_boundary_days(monkeypatch):
     assert "2025-12-31" in provenance["required_detail_days"]
     assert provenance["walk_last_nonmatching_day"] == "2025-12-31"
     assert provenance["preserved_episode_source_days"] == ["2026-01-09"]
+
+
+def test_revision_capacity_is_reserved_for_required_days(monkeypatch):
+    monkeypatch.setattr(S, "REVISION_DETAIL_DAYS_MAX", 3)
+    monkeypatch.setattr(S, "_block_record", lambda *args: None)
+    monkeypatch.setattr(S, "day_evidence",
+                        lambda a, d: (f"evidence {d}", "full"))
+    window = {
+        "window_id": "w", "agent": "a",
+        "seed_days": [_seed("2026-01-12")],
+        "window": {"back_to": "2026-01-08", "forward_to": "2026-01-12"},
+    }
+    _, provenance = S.build_revision_payload(
+        window, {"examined": True, "episodes": []}, {
+            "activity_start_candidate": "2026-01-10",
+            "last_nonmatching_day": "2026-01-08",
+        }, {})
+    assert provenance["required_detail_days"] == [
+        "2026-01-08", "2026-01-10", "2026-01-12"]
+    assert provenance["detail_days"] == provenance["required_detail_days"]
+    assert provenance["required_days_omitted"] == []
+    assert set(provenance["detail_days_omitted"]) == {
+        "2026-01-09", "2026-01-11"}
 
 
 def test_negative_revision_samples_the_interior_history(monkeypatch):
@@ -686,16 +925,14 @@ def test_revision_preflight_skips_model_when_required_evidence_is_missing(
 
 
 def test_run_window_uses_revision_as_the_final_verdict(monkeypatch):
-    initial = {"examined": True, "examined_note": "draft", "episodes": [{
-        "activity": "draft", "activity_predates_window": True}]}
+    initial = {"examined": True, "examined_note": "draft", "episodes": [
+        _stage2_episode(activity="draft", activity_predates_window=True,
+                        activity_start_supported=False,
+                        missing_evidence_for=["activity_start"])]}
     revised = {"examined": True, "examined_note": "reconsidered",
-               "episodes": [{"activity": "revised",
-                              "activity_predates_window": False,
-                              "activity_start": "2026-01-01",
-                              "activity_start_supported": True,
-                              "onset": "2026-01-02",
-                              "onset_supported": True,
-                              "missing_evidence_for": []}]}
+               "episodes": [_stage2_episode(
+                   activity="revised", activity_start="2026-01-01",
+                   onset="2026-01-02")]}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": initial, "provenance": {"pass": 1}, "salvaged": False,
         "usage": {"input_tokens": 1}, "payload_chars": 10,
@@ -719,18 +956,50 @@ def test_run_window_uses_revision_as_the_final_verdict(monkeypatch):
         "explain", "walk", "revision"]
 
 
+def test_length_stopped_revision_cannot_replace_initial_verdict(monkeypatch):
+    initial = {"examined": True, "examined_note": "draft", "episodes": [
+        _stage2_episode(activity="initial activity",
+                        activity_predates_window=True,
+                        activity_start_supported=False,
+                        missing_evidence_for=["activity_start"])]}
+    revised = {"examined": True, "examined_note": "truncated revision",
+               "episodes": [_stage2_episode(activity="replacement activity",
+                                             activity_start="2026-01-01")]}
+    monkeypatch.setattr(S, "explain", lambda *a, **k: {
+        "verdict": initial, "provenance": {}, "salvaged": False,
+        "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
+        "response_complete": True, "refused": False, "raw": None,
+    })
+    monkeypatch.setattr(S, "walk", lambda *a, **k: {
+        "activity_start_candidate": "2026-01-01",
+        "last_nonmatching_day": "2025-12-31", "truncated": False,
+        "usage": {"input_tokens": 1},
+    })
+    monkeypatch.setattr(S, "revise", lambda *a, **k: {
+        "verdict": revised, "provenance": {}, "salvaged": False,
+        "usage": {"input_tokens": 1, "stop_reason": "max_tokens"},
+        "payload_chars": 1, "stop_reason": "max_tokens",
+        "response_complete": False, "refused": False, "raw": None,
+    })
+    out = S.run_window({
+        "window_id": "w", "agent": "a", "seed_days": [_seed("2026-01-10")]
+    }, runs={})
+    assert out["status"] == "incomplete"
+    assert out["episodes"][0]["activity"] == "initial activity"
+    assert out["revision"]["response_complete"] is False
+    assert out["revision"]["draft_verdict"]["episodes"][0]["activity"] == (
+        "replacement activity")
+    assert "max_tokens" in out["revision_error"]
+
+
 def test_unsupported_episode_onset_makes_window_incomplete(monkeypatch):
     verdict = {"examined": True, "examined_note": "gap",
                "history_request": None,
-               "episodes": [{
-                   "activity": "verification loop",
-                   "activity_predates_window": False,
-                   "activity_start_supported": True,
-                   "onset": "2026-01-05",
-                   "onset_supported": False,
-                   "onset_note": "the transition lies in an unsupplied gap",
-                   "missing_evidence_for": ["onset"],
-               }]}
+                   "episodes": [_stage2_episode(
+                       activity="verification loop", onset="2026-01-05",
+                       onset_supported=False,
+                       onset_note="the transition lies in an unsupplied gap",
+                       missing_evidence_for=["onset"])]}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": verdict, "provenance": {}, "salvaged": False,
         "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
@@ -747,23 +1016,18 @@ def test_unsupported_episode_onset_makes_window_incomplete(monkeypatch):
 def test_invalid_episode_evidence_makes_window_incomplete(monkeypatch):
     verdict = {"examined": True, "examined_note": "found drift",
                "history_request": None,
-               "episodes": [{
-                   "activity": "off-goal request",
-                   "activity_predates_window": False,
-                   "activity_start_supported": True,
-                   "onset": "2026-01-05",
-                   "onset_supported": True,
-                   "missing_evidence_for": ["evidence"],
-                   "evidence_validation": {
-                       "complete": False,
-                       "valid_items": 0,
-                       "total_items": 1,
-                       "invalid_items": [{
-                           "index": 0,
-                           "reason": "quote was not found verbatim",
-                       }],
-                   },
-               }]}
+                   "episodes": [_stage2_episode(
+                       activity="off-goal request", onset="2026-01-05",
+                       missing_evidence_for=["evidence"],
+                       evidence_validation={
+                           "complete": False,
+                           "valid_items": 0,
+                           "total_items": 1,
+                           "invalid_items": [{
+                               "index": 0,
+                               "reason": "quote was not found verbatim",
+                           }],
+                       })]}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": verdict, "provenance": {}, "salvaged": False,
         "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
@@ -821,13 +1085,7 @@ def test_negative_history_request_uses_the_bounded_walk(monkeypatch):
 def test_history_request_can_coexist_with_a_complete_episode(monkeypatch):
     request = {"activity": "uncertain loop", "anchor_day": "2026-01-10",
                "reason": "earlier history could reverse the verdict"}
-    complete = {
-        "activity": "supported drift", "activity_start": "2026-01-08",
-        "activity_start_supported": True, "activity_predates_window": False,
-        "onset": "2026-01-09", "onset_supported": True,
-        "missing_evidence_for": [],
-        "evidence_validation": {"complete": True},
-    }
+    complete = _stage2_episode(activity="supported drift")
     verdict = {"examined": True, "examined_note": "mixed",
                "history_request": request, "episodes": [complete]}
     assert S._history_request(verdict) == request
@@ -849,13 +1107,8 @@ def test_history_request_can_coexist_with_a_complete_episode(monkeypatch):
 
 def test_whole_window_examined_false_cannot_be_partial(monkeypatch):
     verdict = {"examined": False, "examined_note": "goal unreadable",
-               "history_request": None, "episodes": [{
-                   "activity": "apparent drift",
-                   "activity_start_supported": True,
-                   "onset_supported": True,
-                   "missing_evidence_for": [],
-                   "evidence_validation": {"complete": True},
-               }]}
+               "history_request": None,
+               "episodes": [_stage2_episode(activity="apparent drift")]}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": verdict, "provenance": {}, "salvaged": False,
         "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
@@ -865,26 +1118,48 @@ def test_whole_window_examined_false_cannot_be_partial(monkeypatch):
     }, runs={})
     assert out["n_complete_episodes"] == 1
     assert out["status"] == "incomplete"
+    assert "examined=false cannot contain episodes" in (
+        out["response_validation"]["errors"])
 
 
-def test_any_named_missing_episode_field_is_incomplete():
-    episode = {
-        "activity_start_supported": True,
-        "onset_supported": True,
-        "missing_evidence_for": ["mechanism"],
-        "evidence_validation": {"complete": True},
-    }
-    assert S.episode_missing_fields(episode) == ["mechanism"]
+def test_malformed_episode_container_cannot_become_a_clean_negative(monkeypatch):
+    monkeypatch.setattr(S, "explain", lambda *a, **k: {
+        "verdict": {"examined": True, "examined_note": "done",
+                    "history_request": None, "episodes": "not-a-list"},
+        "provenance": {}, "salvaged": False, "usage": {},
+        "payload_chars": 1, "stop_reason": "end_turn", "refused": False,
+        "raw": None,
+    })
+    out = S.run_window({
+        "window_id": "w", "agent": "a", "seed_days": [_seed("2026-01-10")]
+    }, runs={})
+    assert out["status"] == "incomplete"
+    assert out["n_drift_episodes"] == 0
+    assert out["response_validation"] == {
+        "complete": False, "errors": ["episodes must be a list"],
+        "model_turn_complete": True}
 
 
-def test_revision_restores_a_complete_episode_it_omitted():
-    complete = {
-        "activity": "supported episode",
+def test_episode_completeness_requires_the_full_output_contract():
+    missing = S.episode_missing_fields({
         "activity_start_supported": True,
         "onset_supported": True,
         "missing_evidence_for": [],
         "evidence_validation": {"complete": True},
-    }
+    })
+    assert "activity" in missing
+    assert "mechanism" in missing
+    assert "correction" in missing
+    assert "verdict_confidence" in missing
+
+
+def test_any_named_missing_episode_field_is_incomplete():
+    episode = _stage2_episode(missing_evidence_for=["mechanism"])
+    assert S.episode_missing_fields(episode) == ["mechanism"]
+
+
+def test_revision_restores_a_complete_episode_it_omitted():
+    complete = _stage2_episode(activity="supported episode")
     incomplete = {
         "activity": "unresolved episode",
         "activity_start_supported": False,
@@ -909,22 +1184,17 @@ def test_revision_restores_a_complete_episode_it_omitted():
 
 
 def test_additional_predating_episode_is_individually_incomplete(monkeypatch):
-    initial_episodes = [{
-        "activity": name, "activity_start": "2026-01-10",
-        "activity_predates_window": True,
-        "activity_start_supported": False,
-        "onset_supported": True,
-        "missing_evidence_for": ["activity_start"],
-    } for name in ("first activity", "second activity")]
-    initial = {"examined": True, "history_request": None,
+    initial_episodes = [_stage2_episode(
+        activity=name, activity_start="2026-01-10",
+        activity_predates_window=True, activity_start_supported=False,
+        missing_evidence_for=["activity_start"])
+        for name in ("first activity", "second activity")]
+    initial = {"examined": True, "examined_note": "draft",
+               "history_request": None,
                "episodes": initial_episodes}
-    revised_episodes = [{
-        "activity": name, "activity_start": "2026-01-01",
-        "activity_predates_window": False,
-        "activity_start_supported": True,
-        "onset_supported": True,
-        "missing_evidence_for": [],
-    } for name in ("first activity", "second activity")]
+    revised_episodes = [_stage2_episode(
+        activity=name, activity_start="2026-01-01")
+        for name in ("first activity", "second activity")]
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": initial, "provenance": {}, "salvaged": False,
         "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
@@ -934,7 +1204,8 @@ def test_additional_predating_episode_is_individually_incomplete(monkeypatch):
         "last_nonmatching_day": "2025-12-31", "truncated": False,
         "usage": {}})
     monkeypatch.setattr(S, "revise", lambda *a, **k: {
-        "verdict": {"examined": True, "history_request": None,
+        "verdict": {"examined": True, "examined_note": "revised",
+                    "history_request": None,
                     "episodes": revised_episodes},
         "provenance": {}, "salvaged": False, "usage": {},
         "payload_chars": 1, "stop_reason": "end_turn",
@@ -952,7 +1223,8 @@ def test_additional_predating_episode_is_individually_incomplete(monkeypatch):
 def test_revision_cannot_request_recursive_history(monkeypatch):
     request = {"activity": "x", "anchor_day": "2026-01-10",
                "reason": "could change the verdict"}
-    initial = {"examined": True, "history_request": request, "episodes": []}
+    initial = {"examined": True, "examined_note": "needs history",
+               "history_request": request, "episodes": []}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": initial, "provenance": {}, "salvaged": False,
         "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
@@ -1019,9 +1291,28 @@ def test_walk_rejects_a_skipped_predecessor(monkeypatch):
     assert out["expected_last_nonmatching_day"] == "2026-01-09"
 
 
+def test_length_stopped_walk_rejects_an_otherwise_valid_boundary(monkeypatch):
+    runs = {("a", "2026-01-10"): {"threads": ["metric loop"]}}
+    monkeypatch.setattr(S, "descriptor_index", lambda *a, **k: (
+        "2026-01-09: other\n2026-01-10: metric loop",
+        ["2026-01-09", "2026-01-10"], False))
+    monkeypatch.setattr(R, "call", lambda *a, **k: (json.dumps({
+        "activity_start_candidate": "2026-01-10",
+        "last_nonmatching_day": "2026-01-09",
+        "why": "parsed but truncated",
+    }), {"stop_reason": "max_tokens"}))
+    out = S.walk({"agent": "a", "seed_days": [_seed("2026-01-10")]},
+                 runs=runs)
+    assert out["response_complete"] is False
+    assert out["draft"]["activity_start_candidate"] == "2026-01-10"
+    assert "max_tokens" in out["error"]
+
+
 def test_unusable_revision_leaves_the_window_incomplete(monkeypatch):
-    initial = {"examined": True, "episodes": [{
-        "activity": "draft", "activity_predates_window": True}]}
+    initial = {"examined": True, "examined_note": "draft", "episodes": [
+        _stage2_episode(activity="draft", activity_predates_window=True,
+                        activity_start_supported=False,
+                        missing_evidence_for=["activity_start"])]}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": initial, "provenance": {}, "salvaged": False,
         "usage": {}, "payload_chars": 1, "stop_reason": "end_turn",
@@ -1043,8 +1334,10 @@ def test_unusable_revision_leaves_the_window_incomplete(monkeypatch):
 
 
 def test_skipped_revision_is_not_recorded_as_a_model_call(monkeypatch):
-    initial = {"examined": True, "episodes": [{
-        "activity": "draft", "activity_predates_window": True}]}
+    initial = {"examined": True, "examined_note": "draft", "episodes": [
+        _stage2_episode(activity="draft", activity_predates_window=True,
+                        activity_start_supported=False,
+                        missing_evidence_for=["activity_start"])]}
     monkeypatch.setattr(S, "explain", lambda *a, **k: {
         "verdict": initial, "provenance": {}, "salvaged": False,
         "usage": {"input_tokens": 1}, "payload_chars": 1,
