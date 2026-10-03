@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "village-drift"
+version = "0.1.0"
+description = "Two-stage audit pipeline for AI Village goal drift"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["village_drift*"]
+
+[tool.setuptools.package-data]
+"village_drift.stage1" = ["prompts/*.md"]
+"village_drift.stage2" = ["prompts/*.md"]

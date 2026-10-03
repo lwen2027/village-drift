@@ -9,28 +9,30 @@ data/
 *.jsonl
 out/
 sweeps/
-# Real Stage-1 output lives in samples/<run>/ and is NOT committed — records
-# carry verbatim agent memory, session goals and chat from a gated dataset.
-# The synthetic fixture (samples/example_*, samples/make_sample.py) IS committed.
-samples/*/
-# Labelled data quotes agent memory/chat from a gated dataset — rebuild locally.
-# Both patterns: the tables live in eval/tables/, and the bare one stays so a
-# stray .jsonl written to eval/ by hand cannot be committed by accident.
-eval/tables/
-# Rendered digests for the Stage-2 episode windows (917 files, 2026-10-01).
-# Same reason as eval/digests/: verbatim agent memory and chat from a gated
-# dataset. The earlier patterns did not cover this directory because it did
-# not exist; reproducible for free from goldenset/render_digest.py.
-eval/digests_windows/
-eval/*.jsonl
-# The labelling surface and the failure-analysis dump are verbatim agent memory,
-# chat and reasoning. ~380 MB, and gated. Regenerate with render_digest.py.
-eval/digests/
-eval/raw/
+
+# Generated pipeline output carries gated agent memory, goals, and chat.
+artifacts/current/
+
+# Golden labels also quote gated material. The episode identity manifest is a
+# schema fixture and remains committed.
+evaluation/goldens/stage1/
+evaluation/goldens/stage2/*
+!evaluation/goldens/stage2/episode_targets.json
+
+# Rendered evaluation evidence and raw agent-days are reproducible from the
+# gated dump, but must not be redistributed.
+evaluation/evidence/
+
+# Historical paid outputs remain local; archive notes and charts are tracked.
+artifacts/archive/*/stage1/model_runs/
+artifacts/archive/*/stage2/artifacts/
 
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+build/
+dist/
 .DS_Store
 
 # Local agent harness state (scheduled tasks from /loop) — not project content

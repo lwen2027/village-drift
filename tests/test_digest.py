@@ -13,10 +13,10 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "eval"))
-
-from goldenset import render_digest as R  # noqa: E402
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, "src"))
+sys.path.insert(0, ROOT)
+from evaluation.goldens import render_digest as R  # noqa: E402
 
 
 def _day(sessions, turns=(), chat=(), memory=()):

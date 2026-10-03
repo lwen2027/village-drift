@@ -16,7 +16,8 @@ import os
 import shutil
 import tempfile
 
-from drift import build, config, load
+from village_drift.stage1 import build
+from village_drift.shared import config, load
 
 
 # --- fixture ----------------------------------------------------------------
@@ -183,7 +184,7 @@ def test_date_token_prefilter_matches_unfiltered():
 def test_empty_command_is_not_a_bash_turn():
     """command="" with no action is not work. `is not None` counted it as bash,
     over-counting GPT-5 by 5 turns/day on real data."""
-    from drift.features import Block, activity_features
+    from village_drift.stage1.features import Block, activity_features
     turns = [{"ts": "2026-08-11 10:00:00", "command": "echo hi", "action": None},
              {"ts": "2026-08-11 10:01:00", "command": "", "action": None},
              {"ts": "2026-08-11 10:02:00", "command": None, "action": "left_click"}]
@@ -196,7 +197,7 @@ def test_empty_command_is_not_a_bash_turn():
 
 def test_span_uses_all_turns_not_just_kept():
     """Presence must not depend on whether the first event was a screenshot."""
-    from drift.features import Block, activity_features
+    from village_drift.stage1.features import Block, activity_features
     turns = [{"ts": "2026-08-11 00:00:00", "command": None, "action": "screenshot"},
              {"ts": "2026-08-11 12:00:00", "command": "echo hi", "action": None},
              {"ts": "2026-08-11 23:59:00", "command": None, "action": "mouse_move"}]
@@ -212,7 +213,7 @@ def test_baseline_compares_like_for_like():
     Haiku reported 0.93 where like-for-like was 1.42, and two agents flipped
     from "below normal" to "above normal".
     """
-    from drift.features import Block, activity_features, kept_turns
+    from village_drift.stage1.features import Block, activity_features, kept_turns
     noisy = ([{"ts": f"2026-08-11 10:{i:02d}:00", "command": "echo x", "action": None}
               for i in range(10)]
              + [{"ts": f"2026-08-11 11:{i:02d}:00", "command": None, "action": "screenshot"}
@@ -234,7 +235,7 @@ def test_goal_resolved_by_timestamp_not_date():
     OUTGOING goal — which is how the eval renderer came to label that day
     "Help Gemini 2.5 Pro!" when the taxonomy has it as the games goal.
     """
-    from drift.build import _assigned_goals
+    from village_drift.stage1.build import _assigned_goals
     vg = [{"goal": "Help Gemini 2.5 Pro!", "start_time": "2026-06-22 14:20:00",
            "end_time": "2026-06-23 14:38:00"},
           {"goal": "Beat the hardest game you can!",
@@ -250,7 +251,7 @@ def test_straddling_day_returns_both_in_order():
     """4 of 4,103 agent-days have turns on both sides of a change (all of them
     2025-06-19). Naming only the incoming goal makes the morning's compliant
     work read as off-goal."""
-    from drift.build import _assigned_goals
+    from village_drift.stage1.build import _assigned_goals
     vg = [{"goal": "Write a story", "start_time": "2025-05-15 18:00:00",
            "end_time": "2025-06-19 12:00:00"},
           {"goal": "Holiday: do whatever you like!",
@@ -260,7 +261,7 @@ def test_straddling_day_returns_both_in_order():
 
 
 def test_individual_goal_beats_village_goal():
-    from drift.build import _assigned_goals
+    from village_drift.stage1.build import _assigned_goals
     ag = [{"agent_id": AGENT, "name": "Maximize widgets",
            "start_time": "2026-08-01 00:00:00", "end_time": None}]
     vg = [{"goal": "Village goal", "start_time": "2026-01-01 00:00:00",
@@ -271,7 +272,7 @@ def test_individual_goal_beats_village_goal():
 
 def test_open_goal_is_flagged_not_recorded_as_no_drift():
     """You cannot drift from "do whatever you'd like". 262 agent-days (6%)."""
-    from drift.features import Block, goal_features
+    from village_drift.stage1.features import Block, goal_features
     b = Block("A", "2026-02-16")
     goal_features(b, [{"text": "Pick your own goal (agents bid 3.7 farewell)"}], None)
     assert b.facts["goal_is_open"].value is True
@@ -281,7 +282,7 @@ def test_open_goal_is_flagged_not_recorded_as_no_drift():
 
 
 def test_goal_change_counters_are_recorded():
-    from drift.features import Block, goal_features
+    from village_drift.stage1.features import Block, goal_features
     b = Block("A", "2026-06-23")
     goal_features(b, [{"text": "Beat the hardest game you can!"}], None,
                   since_change=0, changes_in_baseline=4)
@@ -295,7 +296,7 @@ def test_goal_change_counters_are_recorded():
 def test_history_strip_marks_where_the_assignment_changed():
     """76% of 14-day windows cross a goal change. Unmarked, the judge reads
     "yesterday a park clean-up, today chess" as a swerve, not an instruction."""
-    from drift.features import history_strip
+    from village_drift.stage1.features import history_strip
     prior = [("2026-06-16", "clean the park"), ("2026-06-17", "more park"),
              ("2026-06-23", "play chess")]
     goals = {"2026-06-16": "Adopt a park", "2026-06-17": "Adopt a park",

@@ -1,7 +1,7 @@
 """Unit tests for the parts that have silently broken before."""
-from drift import config
-from drift import features as F
-from drift.load import split_messages
+from village_drift.shared import config
+from village_drift.stage1 import features as F
+from village_drift.shared.load import split_messages
 
 
 def test_split_every_provider_shape():
@@ -90,9 +90,9 @@ def test_sample_fixture_round_trips():
     """The committed sample must stay in sync with the render path."""
     import json, os, subprocess, sys
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    subprocess.run([sys.executable, "samples/make_sample.py"], cwd=here,
+    subprocess.run([sys.executable, "examples/make_sample.py"], cwd=here,
                    check=True, capture_output=True)
-    rec = json.load(open(os.path.join(here, "samples/example_record.json")))
+    rec = json.load(open(os.path.join(here, "examples/example_record.json")))
     assert rec["agent"] == "Example Agent 1.0"
     # every null kind is exercised by the fixture
     kinds = {v["value"]["null"] for v in rec["facts"].values()

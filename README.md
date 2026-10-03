@@ -34,14 +34,14 @@ to count, diff or divide.
 STAGE 1   unit: the agent-day   "was this day spent on the assigned goal?"
           every day -> is_drift + confidence, i.e. a RANKED LIST
 HANDOFF   the selection rule (conf<0.74), then window construction
-          audit/pipeline.py
+          src/village_drift/handoff/pipeline.py
 STAGE 2   unit: the episode     "when did it start, why, what could it have
           a window -> a LIST of drift episodes    done instead, was it fixed?"
 ```
 
-![The pipeline](eval/pipeline.png)
+![The pipeline](docs/assets/pipeline.png)
 
-**📄 The design, in full, is `eval/docs/PIPELINE.md`** — both stages, the
+**The design, in full, is `docs/PIPELINE.md`** — both stages, the
 handoff, the measurements behind each choice, and what was tried and
 rejected. That document is authoritative; this README is an entry point.
 
@@ -57,16 +57,17 @@ inherits an unbiased candidate set.
 
 ## Install and run
 
-Python 3.9+, standard library only. `orjson` is used automatically if present.
+Python 3.10+, standard library only. `orjson` is used automatically if present.
 
 ```bash
+python3 -m pip install -e .
 export VILLAGE_DATA=~/Documents/ai-village          # the dataset dump
 
-# all agent-days in a range -> samples/<N>-agent-days-<start>..<end>/
-python3 -m drift.cli --start 2026-08-26 --end 2026-08-28
+# all agent-days in a range -> artifacts/current/stage1/<run>/
+python3 -m village_drift.stage1.cli --start 2026-08-26 --end 2026-08-28
 
 # inspect one agent's block instead of writing
-python3 -m drift.cli --start 2026-08-26 --end 2026-08-28 --preview "Claude Haiku 4.5"
+python3 -m village_drift.stage1.cli --start 2026-08-26 --end 2026-08-28 --preview "Claude Haiku 4.5"
 ```
 
 A 3-day range takes ~45s; the cost is streaming two ~2GB gzipped files.
@@ -83,14 +84,21 @@ python3 scripts/pull_metrics.py --since 2026-07-01 --out data/metrics.json
 ## Layout
 
 ```
-drift/config.py     tunable constants; each carries the measurement behind it
-drift/load.py       streaming loaders + provider-shape message splitting
-drift/features.py   the feature computations
-drift/build.py      agent-major precompute -> day-major emission
-drift/render.py     record -> the text block the judge reads
-scripts/            pull_metrics.py (DB-only metric series)
-samples/            synthetic example; real runs land here and are gitignored
-tests/              unit + structural tests
+src/village_drift/
+  shared/           ingestion, compression, evidence and rendering
+  stage1/           agent-day construction, prompts and model runner
+  handoff/          readiness, selection and window construction
+  stage2/           explain, backward walk, revision and validation
+evaluation/
+  goldens/          frozen labels and golden-set tooling
+  evidence/         rendered/raw evaluation inputs (gitignored)
+  stage1/ stage2/   scorers and evaluation runners
+artifacts/
+  current/          generated blocks and model outputs (gitignored)
+  archive/          explicitly superseded experiments
+docs/               active protocols, design, research and history
+examples/           committed synthetic record and rendered block
+tests/              unit, structural and pipeline tests
 ```
 
 ## Output
@@ -99,7 +107,7 @@ One indented JSON file per village-day, holding an array of that day's agent-day
 records, plus a manifest recording the feature version and every constant used.
 
 ```
-samples/82-agent-days-2026-08-26..2026-08-28/
+artifacts/current/stage1/82-agent-days-2026-08-26..2026-08-28/
     2026-08-26.json
     manifest.json
 ```
@@ -119,10 +127,10 @@ INTERACTION       chat volume; which peers the day was organised around
 CONTEXT           prior memory outline · prior 14 active days of session goals
 ```
 
-`samples/example_block.txt` shows the rendered form. It is **synthetic** —
+`examples/example_block.txt` shows the rendered form. It is **synthetic** —
 fabricated values through the real render path — because real records carry
 verbatim agent memory and chat from a gated dataset. Regenerate with
-`python3 samples/make_sample.py`.
+`python3 examples/make_sample.py`.
 
 ### Reading a record
 
@@ -160,14 +168,16 @@ while AUC holds to two decimals. **Read AUC, not recall.**
 verdict is drift   OR   verdict is not-drift AND confidence < 0.74
 ```
 
-Reads 53% of scored days, catches 25 of 25. Implemented in
-`audit/pipeline.py`, which also builds the windows Stage 2 reads.
+In the archived pre-overhaul run this read 53% of scored days and caught 25 of
+25; that coverage claim must be remeasured under the current prompts.
+Implemented in `src/village_drift/handoff/pipeline.py`, which also builds the
+windows Stage 2 reads.
 
 After the corpus-wide Stage 1 run, validate its exact expected row set before
 paying for Stage 2:
 
 ```bash
-python3 audit/pipeline.py validate --tag B-full --rows full
+python3 -m village_drift.handoff.pipeline validate --tag B-full --rows full
 ```
 
 The command exits nonzero until every expected active day has a successful
@@ -178,15 +188,17 @@ contiguous history for a backward walk.
 
 Stage 2 cache entries are tied to an input-coverage fingerprint, so completing
 that backfill automatically reruns affected windows. Pass `--rerun` to
-`audit/stage2.py` to force a fresh judgement even when the fingerprint matches.
+`python3 -m village_drift.stage2.run` to force a fresh judgement even when
+the fingerprint matches.
 
-Current run `B-peerfix`, 93 scorable rows of 100:
+Archived pre-overhaul run `B-peerfix`, 93 scorable rows of 100:
 
 ```
   AUC 0.95   precision 0.86   recall 0.76   F1 0.81   accuracy 0.90
 ```
 
-**→ `eval/docs/PIPELINE.md` has the rest**: why a threshold beats a fixed
+These are historical diagnostics, not current performance numbers. **→
+`docs/PIPELINE.md` has the rest**: why a threshold beats a fixed
 percentile (the era split), why 0.74 rather than the tightest cut that works,
 the out-of-sample check against the golden set, and the caveats on every
 number above.
@@ -194,7 +206,7 @@ number above.
 ## Design decisions
 
 Constants are not preferences — each was measured, and several replaced an
-approach that failed. Reasoning is recorded inline in `drift/config.py` and in
+approach that failed. Reasoning is recorded inline in `src/village_drift/shared/config.py` and in
 full in `ai-village-stage1-feature-spec.md`. In brief:
 
 - **Precompute agent-major, emit day-major.** Rolling windows need each agent's
@@ -228,72 +240,48 @@ assignment, cross-agent isolation, goal fallback, baseline units, and that the
 byte-prefilter cannot change results.
 
 Output is also validated against an independent parser that reads the dump
-directly with no `drift/` imports and recomputes nine fields per agent-day. On
+directly with no `village_drift` imports and recomputes nine fields per
+agent-day. On
 2026-08-26..28 all nine match on every record.
 
 ## Data handling
 
 The source dataset is gated ("use for research and analysis… do not attempt to
-re-identify"). `samples/*/` and `data/` are gitignored: records carry verbatim
+re-identify"). `artifacts/current/`, `evaluation/goldens/`,
+`evaluation/evidence/`, and `data/` are gitignored: records carry verbatim
 agent memory, session goals and chat. Only the synthetic fixture is committed.
 
 Database credentials are read from `DATABASE_URI` and must never be committed.
 
 ## Status
 
-**Stage 1 — implemented and measured.** Current run is `B-peerfix`, 93
-scorable rows of 100, hybrid arm B:
+**The current protocol is implemented but not yet remeasured.** On 2026-10-02,
+prompt and schema changes affected Stage 1 extraction and judging plus Stage 2
+explain, walk and revision. All earlier model outputs, score tables and charts
+are therefore historical. They are preserved in
+`artifacts/archive/2026-10-02-pre-prompt-overhaul/`, not treated as a current
+baseline. Golden labels and deterministic inputs remain active and unchanged.
 
-```
-  AUC 0.95     precision 0.86   recall 0.76   F1 0.81   accuracy 0.90
-```
+**Stage 1 — implemented, post-overhaul baseline pending.** The historical arm
+bake-off still supports the hybrid-B architecture, but its exact AUC,
+precision, recall, F1 and accuracy do not measure the present prompts.
 
-Read AUC, not recall: see the variance note above. The arm bake-off (A/B/C/D)
-is finished and closed — hybrid B won and is the design.
-
-**Stage 2 — implemented, current baseline measured.** It reads a contiguous
+**Stage 2 — implemented, post-overhaul baseline pending.** It reads a contiguous
 token-bounded window and returns a LIST of drift episodes, because 14 of 20
 measured windows contain more than one activity. Three passes, the last two
 conditional: explain; a backward walk when an episode predates the readable
 window; then revision against the expanded evidence. Prompts are
-`audit/stage2.md`, `audit/walk.md`, and `audit/stage2_revision.md`.
+`src/village_drift/stage2/prompts/explain.md`,
+`src/village_drift/stage2/prompts/walk.md`, and
+`src/village_drift/stage2/prompts/revise.md`.
 
-**The handoff exists** — `audit/pipeline.py` applies the selection rule and
-builds windows. Until 2026-10-01 nothing joined the two stages.
+**The handoff exists** — `src/village_drift/handoff/pipeline.py` applies the
+selection rule and builds windows. Until 2026-10-01 nothing joined the two
+stages.
 
-**Current measurement, 2026-10-02.** With Stage-1 routing pinned to
-`B-peerfix` and the frozen 490-day descriptor snapshot (`c59beb90f609…`), 17
-of 20 golden cases route to Stage 2. Seven produced usable final answers and
-ten were explicitly incomplete. Conditional on an answer, TP 5 / FP 0 /
-FN 0 / TN 2 gives precision, recall, accuracy and F1 of 1.000. Operationally,
-coverage is only 0.412; counting unresolved cases as failures gives
-accepted-call precision 1.000, recall 0.500, accuracy 0.412 and F1 0.667. Five
-unresolved cases are positive and five negative. Nine requested a walk, seven
-made a revision call, two revisions were skipped, and the run cost $17.60.
-
-The accepted-answer metrics improved over the 2026-10-01 baseline, but the
-pipeline did not improve operationally: stricter boundary checks increased
-incomplete windows from two to ten. The prior TP 5 / FP 3 / FN 3 / TN 4 on
-15 usable cases is historical rather than directly comparable.
-
-The evaluator now matches positive predictions to human-authored activity
-identity anchors rather than crediting any episode in the same window.
-Negative labels are exhaustive window audits. Re-scoring the saved run under
-that episode-level contract left the TP/FP/FN/TN counts unchanged.
-
-A three-case probe after restoring the explicit metric-substitution rule fixed
-two prior false negatives (Claude Sonnet 4.5 and DeepSeek V4 Pro). GPT-5.5
-remained negative with only about one of 68 days visible, isolating the next
-problem as negative explanations being unable to request a backward walk.
-This probe cost $2.49; the full baseline above has not yet been rerun.
-
-Stage 2 also requires each episode to distinguish a supported onset from a
-date inferred across an evidence gap. Unsupported or omitted onset support is
-recorded by episode index and makes the existing window status incomplete; no
-additional `partial` status has been introduced.
-The motivating GPT-5.2-agent probe now records its onset as unsupported across
-the unsupplied 2026-07-24..2026-08-12 gap and correctly finishes incomplete
-instead of as a final false positive. The validation call cost $1.06.
+The next valid measurement must regenerate Stage 1 extraction outputs and
+descriptors, rebuild the Stage 2 descriptor index, and rerun both frozen golden
+evaluations. See `docs/STAGE2_HANDOFF.md` for the measurement checklist.
 
 **Not yet done, in rough priority order:**
 
@@ -307,10 +295,10 @@ instead of as a final false positive. The validation call cost $1.06.
   exact on 5, within three days on 6, with median absolute error 2 days and
   maximum error 21 days. It cost $0.14. The mechanical predecessor scored AUC
   0.158, which is *inverted*, not weak.
-- `eval/raw/` holds only the 101 sampled days, so Stage 2's unsampled
+- `evaluation/evidence/raw/` holds only the 101 sampled days, so Stage 2's unsampled
   reasoning pull needs raw fetched for flagged days and the day before each.
 - `eval/episodes.py` and `eval/walk_probe.py` are **deleted** (2026-10-01).
   Both implemented the mechanical similarity walk — Jaccard over whole-day
-  word bags — which scored AUC 0.158, i.e. inverted. `audit/pipeline.py`
+  word bags — which scored AUC 0.158, i.e. inverted. `src/village_drift/handoff/pipeline.py`
   builds windows now and the walk is a model call. Git has both files; the
-  finding they produced is in `eval/docs/PIPELINE.md`.
+  finding they produced is in `docs/PIPELINE.md`.
