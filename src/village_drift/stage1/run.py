@@ -430,7 +430,8 @@ MAX_INPUT_TOKENS = int(os.environ.get("ARENA_MAX_INPUT_TOKENS", "950000"))
 CHARS_PER_TOKEN = 1.9
 
 
-def call(model, system, user, stub=False, stub_json=None):
+def call(model, system, user, stub=False, stub_json=None,
+         refusal_retries=None):
     """Return (text, usage). Usage is whatever the API REPORTED — never an
     estimate. --stub exercises the whole path, including scoring, for free."""
     # A rough estimate, used ONLY as a tripwire -- the numbers that get
@@ -516,8 +517,10 @@ def call(model, system, user, stub=False, stub_json=None):
 
         out = _acc({}, d)
         attempts, refusals = 1, 0
+        retry_limit = (REFUSAL_RETRIES if refusal_retries is None
+                       else max(0, int(refusal_retries)))
         while (d.get("stop_reason") == "refusal"
-               and attempts <= REFUSAL_RETRIES):
+               and attempts <= retry_limit):
             refusals += 1
             attempts += 1
             d = _post(ANTHROPIC, {"model": model, "max_tokens": 16000,

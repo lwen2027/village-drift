@@ -205,8 +205,9 @@ Prompt: `src/village_drift/stage2/prompts/explain.md`. Implementation: `src/vill
   pass 1   explain a contiguous token-bounded window around the seed days
   trigger  a drift episode predates the window, or a provisional negative
            names one activity in `history_request`
-  pass 2   the walk — a cheap descriptor index reaching ~45 days back for ~4¢
+  pass 2   the walk — a cheap descriptor index reaching up to 180 active days back
   pass 3   revise — a bounded compact spine plus detailed boundary evidence
+  resolve  at most two episode-locked expansions for incomplete outcomes
 ```
 
 The walk used to run **first**, on the theory that a window could not be sized
@@ -224,12 +225,27 @@ evidence around the discovered start, goal changes and seed days. The initial
 answer remains in the output for provenance. If the walk is truncated or the
 bounded revision cannot answer, the unresolved activity is explicit. A window
 with another complete episode is `partial`; one with no conclusive result is
-`incomplete`. `history_request` does not add a pass or recurse: it lets an
-unresolved candidate enter the same single walk and revision while separately
-supported episodes remain reportable. The named activity controls the walk
-anchor. A second request after revision remains unresolved. For negative requests,
-unused detail slots are filled with systematically spaced interior days so a
-relationship change in the middle is not represented only by its endpoints.
+`incomplete`. `history_request` first lets an unresolved candidate enter the
+same walk and revision while separately supported episodes remain reportable.
+Afterward, the bounded resolver may continue that exact episode or candidate
+for at most two additional evidence expansions. It locks the activity identity,
+checkpoints every model attempt, and stops at missing evidence or the attempt
+limit rather than recursing indefinitely. For negative requests, unused detail
+slots are filled with systematically spaced interior days so a relationship
+change in the middle is not represented only by its endpoints.
+
+Resolver dispatch is reason-specific. A refused or invalid response receives
+one fallback attempt with Claude Opus 4.8. Unsupported activity starts continue
+the descriptor walk; unsupported onset or mechanism fields hydrate detailed
+days around the claimed transition; invalid quotations are repaired against
+the same evidence once. Oversized revision packets are rebuilt around one
+episode and its boundary days. If that focused packet still exceeds the 250K
+token ceiling, the episode remains unresolved for human review. Run the
+post-stage resolver with:
+
+```bash
+python3 -m village_drift.stage2.resolve --all --descriptor-tags B-full
+```
 
 Episode onset support is explicit. Every reported episode must set
 `onset_supported`; an onset inferred from a compact spine, a walk result, a gap

@@ -76,7 +76,12 @@ You are dating when an agent's activity BEGAN.
 You get one line per active day: the date, then that day's distinct work
 threads separated by |.
 
-An ANCHOR DAY and ANCHOR ACTIVITY are named below. The anchor is worded as
+An ANCHOR DAY and ANCHOR ACTIVITY are named below. When a TARGET ACTIVITY is
+also supplied, it fixes the candidate's identity; do not replace it with a
+different activity. The anchor remains one actual descriptor thread from the
+anchor day and is only the starting wording used to locate that target.
+
+The anchor is worded as
 that day described it, which is often ONE SPECIFIC INSTANCE of a broader
 ongoing activity. Before walking, restate it in its general form — what kind
 of work is this, of which the anchor is one example — and match on that, not

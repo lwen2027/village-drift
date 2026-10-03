@@ -34,9 +34,10 @@ candidate only as an observed lower bound, set `activity_start_supported`
 false, and include `"activity_start"` in `missing_evidence_for`. Do not replace
 the candidate with another supposedly supported date from the compact spine.
 
-This is the only expansion; the runner will not perform another walk. Return
-`history_request: null` when the expanded candidate is resolved. If it remains
-too uncertain to report even as an incomplete drift episode, repeat the
-incoming `history_request` unchanged as an unresolved-candidate marker. That
-marker records incompleteness; it does not request recursion. Do not invent a
-different activity or anchor.
+Return `history_request: null` when the expanded candidate is resolved. If it
+remains too uncertain to report even as an incomplete drift episode, repeat
+the incoming `history_request` unchanged as an unresolved-candidate marker.
+The runner may make at most two bounded, identity-locked expansions; the marker
+records what remains unresolved for that state machine. It is not permission
+to request arbitrary evidence or to recurse without a fixed limit. Do not
+invent a different activity or anchor.

@@ -5,7 +5,7 @@ asks, of a whole episode, "when did this start, why, what could the agent
 have done instead, and was it corrected?" Different unit, different
 evidence, different call.
 
-THREE PASSES, WITH THE LAST TWO CONDITIONAL. The explanation first reads detailed
+THREE PRIMARY PASSES, WITH THE LAST TWO CONDITIONAL. The explanation first reads detailed
 evidence in a contiguous, token-bounded window grown backward from the seed
 days. In most episodes that window already contains the activity start. Only
 when the judge reports that an activity predates the readable window does the
@@ -16,6 +16,11 @@ plus detailed evidence around the discovered start, goal changes and seed days.
     pass 1   explain   block + evidence, up to ~250K tok        ~$1.0-1.6
     pass 2   walk      180-day descriptor index, if needed       ~2K tok
     pass 3   revise    bounded boundary evidence, if pass 2 ran  <=200K tok
+
+Persisted incomplete episodes may then enter the separately checkpointed
+bounded resolver in resolve.py. It can make at most two identity-locked
+evidence expansions and one Opus 4.8 fallback; it is not an unbounded fourth
+model loop.
 
 The walk's date is a locator, not a correction pasted onto a causal account
 formed without the earlier evidence. The initial explanation is retained for
@@ -189,6 +194,7 @@ import village_drift.shared.render as render_module
 from village_drift.shared.compress import evenly_spaced_sample
 from village_drift.shared.evidence import STAGE2_EVIDENCE
 from village_drift.stage1 import run as R
+from village_drift.stage2.persistence import atomic_write_json, output_lock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROMPTS = os.path.join(HERE, "prompts")
@@ -206,7 +212,7 @@ WINDOWS = str(paths.STAGE2_GOLDENS / "windows.jsonl")
 # _run_index for the two bugs that mixing arms has already caused.
 ARM_PREFIX = os.environ.get("ARENA_ARM_PREFIX", "B-")
 OUT = str(paths.STAGE2_ARTIFACTS / "explained")
-OUTPUT_SCHEMA_VERSION = 10
+OUTPUT_SCHEMA_VERSION = 11
 PAYLOAD_SOURCE_FILES = (
     __file__, evidence_module.__file__, render_module.__file__,
     compress_module.__file__,
@@ -218,6 +224,18 @@ def prompt(name="stage2"):
     with open(os.path.join(PROMPTS, PROMPT_FILES[name])) as fh:
         text = fh.read()
     return re.sub(r"<!--.*?-->\s*", "", text, flags=re.S).strip() + "\n"
+
+
+def model_call(model, system, user, stub=False, stub_json=None,
+               refusal_retries=None):
+    """Call a Stage-2 model only when the complete request fits its budget."""
+    estimated = int((len(system) + len(user)) / CHARS_PER_TOKEN_BUDGET)
+    if estimated > MAX_PAYLOAD_TOKENS:
+        raise ValueError(
+            f"Stage-2 request is ~{estimated:,} tokens, over the "
+            f"{MAX_PAYLOAD_TOKENS:,}-token hard limit")
+    return R.call(model, system, user, stub, stub_json=stub_json,
+                  refusal_retries=refusal_retries)
 
 # Digest roots and their naming live in shared/config.STORES, with every
 # other artifact's. Digests come from the DUMP, not from Stage 1 -- see
@@ -585,7 +603,8 @@ def anchor_day_for(window, runs):
     return cands[0]["day"] if cands else None
 
 
-def walk(window, stub=False, runs=None, request=None):
+def walk(window, stub=False, runs=None, request=None, lookback=WALK_LOOKBACK,
+         model=None, lock_activity=False, refusal_retries=None):
     """Pass 2: locate a candidate activity start in the descriptor index.
 
     The temporary anchor is chosen from seed days with Stage-1 descriptors,
@@ -608,13 +627,18 @@ def walk(window, stub=False, runs=None, request=None):
     entry = runs[(agent, anchor_day)]
     threads = entry["threads"]
     anchor_hint = (request or {}).get("activity")
-    anchor = _anchor(threads, anchor_hint or entry.get("decisive_evidence"))
-    index, days, empty = descriptor_index(agent, anchor_day, runs=runs)
+    anchor = _anchor(
+        threads, anchor_hint or entry.get("decisive_evidence"))
+    index, days, empty = descriptor_index(
+        agent, anchor_day, lookback=lookback, runs=runs)
     if empty:
         return {"error": f"descriptor index is empty for {agent} before "
                          f"{anchor_day}"}
 
-    user = (f"ANCHOR DAY: {anchor_day}\n"
+    identity = (f"TARGET ACTIVITY (identity lock): {anchor_hint}\n"
+                if lock_activity and anchor_hint else "")
+    user = (identity
+            + f"ANCHOR DAY: {anchor_day}\n"
             f"ANCHOR ACTIVITY: {anchor}\n\n"
             f"DAILY THREADS:\n{index}")
     anchor_index = days.index(anchor_day)
@@ -624,8 +648,10 @@ def walk(window, stub=False, runs=None, request=None):
         "why": "stub",
         "last_nonmatching_day": stub_predecessor,
     })
-    text, usage = R.call(R.MODELS["judge"], prompt("walk"),
-                         user, stub, stub_json=walk_stub)
+    model = model or R.MODELS["judge"]
+    text, usage = model_call(
+        model, prompt("walk"), user, stub, stub_json=walk_stub,
+        refusal_retries=refusal_retries)
     obj, salvaged = R._json(text)
     obj = obj if isinstance(obj, dict) else {}
     stop = (usage or {}).get("stop_reason")
@@ -667,6 +693,7 @@ def walk(window, stub=False, runs=None, request=None):
         "anchor": anchor,
         "requested_activity": anchor_hint,
         "requested_anchor_day": requested_day,
+        "lookback": lookback,
         "index_days": len(days),
         "index_earliest": days[0] if days else None,
         # The prompt is told to return the earliest day it was given when it
@@ -1685,11 +1712,13 @@ def validate_episode_corrections(verdict):
     return verdict
 
 
-def explain(window, stub=False):
+def explain(window, stub=False, model=None, refusal_retries=None):
     """Pass 1: find and explain episodes in the detailed evidence window."""
     payload, prov = build_payload(window)
-    text, usage = R.call(R.MODELS["judge"], prompt("stage2"),
-                         payload, stub, stub_json=STUB_JSON)
+    model = model or R.MODELS["judge"]
+    text, usage = model_call(
+        model, prompt("stage2"), payload, stub, stub_json=STUB_JSON,
+        refusal_retries=refusal_retries)
     obj, salvaged = R._json(text)
     obj = obj if isinstance(obj, dict) else {}
     validate_episode_corrections(obj)
@@ -1829,7 +1858,9 @@ def _clip_revision_day(text, limit):
     return text[:head] + marker + (text[-tail:] if tail else ""), True
 
 
-def build_revision_payload(window, initial, walked, runs):
+def build_revision_payload(window, initial, walked, runs,
+                           required_focus_days=None,
+                           optional_focus_days=None):
     """Bounded evidence packet for reconsidering a draft after the walk."""
     agent = window["agent"]
     seeds = _seed_dates(window)
@@ -1854,7 +1885,18 @@ def build_revision_payload(window, initial, walked, runs):
             except ValueError:
                 continue
             preserved_episode_days.add(day)
-    lo = min([start, seeds[0], *preserved_episode_days]
+    focused = required_focus_days is not None
+    focus_days = list(required_focus_days or []) + list(
+        optional_focus_days or [])
+    valid_focus_days = []
+    for day in focus_days:
+        day = str(day or "")[:10]
+        try:
+            _date(day)
+        except ValueError:
+            continue
+        valid_focus_days.append(day)
+    lo = min([start, seeds[0], *preserved_episode_days, *valid_focus_days]
              + ([predecessor] if predecessor else []))
     spine, goal_changes, spine_coverage = build_spine(agent, lo, hi, runs)
 
@@ -1873,26 +1915,34 @@ def build_revision_payload(window, initial, walked, runs):
             if is_required:
                 required.add(day)
 
-    for offset in (-1, 0, 1):
-        want(_shift(start, offset), 0, is_required=offset == 0)
-    want(predecessor, 0, is_required=predecessor is not None)
-    for day in goal_changes:
-        for offset in (-1, 0, 1):
-            want(_shift(day, offset), 1, is_required=offset == 0)
-    for day in seeds:
-        want(day, 1, is_required=True)
-    for episode in initial.get("episodes") or []:
-        if not isinstance(episode, dict):
-            continue
-        for key in ("onset", "corrected_at"):
-            value = episode.get(key)
-            if value:
-                want(value, 2, is_required=True)
-    for day in preserved_episode_days:
-        want(day, 1, is_required=True)
     request = initial.get("history_request") or {}
-    if isinstance(request, dict):
-        want(request.get("anchor_day"), 2, is_required=True)
+    if focused:
+        for day in required_focus_days or []:
+            want(day, 0, is_required=True)
+        for day in optional_focus_days or []:
+            want(day, 1)
+    else:
+        for offset in (-1, 0, 1):
+            want(_shift(start, offset), 0, is_required=offset == 0)
+        want(predecessor, 0, is_required=predecessor is not None)
+        for day in goal_changes:
+            for offset in (-1, 0, 1):
+                want(_shift(day, offset), 1, is_required=offset == 0)
+        for day in seeds:
+            want(day, 1, is_required=True)
+        for episode in initial.get("episodes") or []:
+            if not isinstance(episode, dict):
+                continue
+            for key in ("onset", "corrected_at"):
+                value = episode.get(key)
+                if value:
+                    for offset in (-1, 0, 1):
+                        want(_shift(value, offset), 2,
+                             is_required=offset == 0)
+        for day in preserved_episode_days:
+            want(day, 1, is_required=True)
+        if isinstance(request, dict):
+            want(request.get("anchor_day"), 2, is_required=True)
 
     # A negative history request has no draft onset to prioritize. The walk
     # locates activity_start, but relationship changes often happen in the
@@ -1901,7 +1951,7 @@ def build_revision_payload(window, initial, walked, runs):
     # not just two endpoints and a compact descriptor spine.
     history_sample_days = []
     anchor_day = str(request.get("anchor_day") or "")[:10]
-    if request and anchor_day:
+    if not focused and request and anchor_day:
         candidates = sorted(
             day for owner, day in runs
             if owner == agent and start <= day <= anchor_day)
@@ -2038,10 +2088,29 @@ def preserve_complete_episodes(initial, revised):
     return preserved
 
 
-def revise(window, initial, walked, stub=False, runs=None):
+def revision_system(locked_activity=None):
+    system = (prompt("stage2") + "\n\n" + prompt("stage2_revision"))
+    if locked_activity:
+        system += (
+            "\n\nRESOLVER IDENTITY LOCK\n"
+            "This revision resolves exactly one existing candidate. Either "
+            "return no episode because the candidate is not drift, or return "
+            "exactly one episode whose `activity` is copied byte-for-byte "
+            "from this anchor. Do not substitute or add another activity.\n"
+            f"LOCKED ACTIVITY: {locked_activity}\n")
+    return system
+
+
+def revise(window, initial, walked, stub=False, runs=None, model=None,
+           locked_activity=None, refusal_retries=None,
+           validate_boundary=True, required_focus_days=None,
+           optional_focus_days=None):
     """Re-adjudicate after a walk, unless packet construction proves it futile."""
     runs = runs if runs is not None else _run_index()
-    payload, provenance = build_revision_payload(window, initial, walked, runs)
+    payload, provenance = build_revision_payload(
+        window, initial, walked, runs,
+        required_focus_days=required_focus_days,
+        optional_focus_days=optional_focus_days)
     blockers = revision_blockers(provenance)
     if blockers:
         return {
@@ -2056,16 +2125,23 @@ def revise(window, initial, walked, stub=False, runs=None):
             "skipped": True,
             "blockers": blockers,
         }
-    system = (prompt("stage2") + "\n\n" + prompt("stage2_revision"))
+    system = revision_system(locked_activity)
     revision_stub = json.loads(REVISION_STUB_JSON)
     revision_stub["episodes"][0]["activity_start"] = (
         walked["activity_start_candidate"])
-    text, usage = R.call(R.MODELS["judge"], system, payload, stub,
-                         stub_json=json.dumps(revision_stub))
+    if locked_activity:
+        revision_stub["episodes"][0]["activity"] = locked_activity
+    model = model or R.MODELS["judge"]
+    text, usage = model_call(
+        model, system, payload, stub,
+        stub_json=json.dumps(revision_stub),
+        refusal_retries=refusal_retries)
     obj, salvaged = R._json(text)
     obj = obj if isinstance(obj, dict) else {}
     validate_episode_corrections(obj)
-    validate_episode_evidence(obj, payload, skip=stub, boundary=walked)
+    validate_episode_evidence(
+        obj, payload, skip=stub,
+        boundary=walked if validate_boundary else None)
     schema_errors = validate_stage2_verdict(obj)
     preserved = preserve_complete_episodes(initial, obj)
     stop = (usage or {}).get("stop_reason")
@@ -2080,7 +2156,8 @@ def revise(window, initial, walked, stub=False, runs=None):
 
 
 def run_window(window, stub=False, runs=None, fingerprint=None,
-               fingerprint_summary=None):
+               fingerprint_summary=None, explain_model=None,
+               explain_refusal_retries=None):
     runs = runs if runs is not None else _run_index()
     if fingerprint is None or fingerprint_summary is None:
         fingerprint, fingerprint_summary = input_fingerprint(window, runs)
@@ -2102,8 +2179,10 @@ def run_window(window, stub=False, runs=None, fingerprint=None,
         # walk earns its cost only where the activity genuinely predates
         # what one read can hold -- which the judge now reports directly,
         # rather than being guessed at in advance.
-        e = explain(window, stub=stub)
-        rec["calls"].append({"stage": "explain", "model": R.MODELS["judge"],
+        explain_model = explain_model or R.MODELS["judge"]
+        e = explain(window, stub=stub, model=explain_model,
+                    refusal_retries=explain_refusal_retries)
+        rec["calls"].append({"stage": "explain", "model": explain_model,
                              "usage": e["usage"]})
 
         # PASS 2: only for episodes the judge says start before its window.
@@ -2500,19 +2579,18 @@ def main():
     for i, window in enumerate(windows, 1):
         out = os.path.join(OUT, f"{window['window_id']}.json")
         fingerprint, fingerprint_summary = input_fingerprint(window, runs)
-        # RESUME. Shared with run.py rather than reimplemented -- stage2 had
-        # no resume at all, which is exactly what a second copy of a runner
-        # loop costs you. See R.already_done for the stub and error rules.
-        if not a.rerun and already_done(out, fingerprint, a.stub):
-            print(f"  [{i}/{len(windows)}] {window['window_id']}  cached")
-            continue
-        rec = run_window(window, stub=a.stub, runs=runs,
-                         fingerprint=fingerprint,
-                         fingerprint_summary=fingerprint_summary)
-        total += cost(rec)
-        done += 1
-        with open(out, "w") as fh:
-            json.dump(rec, fh, indent=1, ensure_ascii=False, default=str)
+        # Check and write under one advisory lock. Otherwise two paid runners
+        # can both miss the cache and the last one silently wins.
+        with output_lock(out):
+            if not a.rerun and already_done(out, fingerprint, a.stub):
+                print(f"  [{i}/{len(windows)}] {window['window_id']}  cached")
+                continue
+            rec = run_window(window, stub=a.stub, runs=runs,
+                             fingerprint=fingerprint,
+                             fingerprint_summary=fingerprint_summary)
+            total += cost(rec)
+            done += 1
+            atomic_write_json(out, rec)
         flag = f"ERROR {rec['error']}" if rec.get("error") else (
             f"status={rec.get('status')} episodes={rec.get('n_drift_episodes', 0)} "
             f"{'(TRUNCATED WALK)' if (rec.get('walk') or {}).get('truncated') else ''}")

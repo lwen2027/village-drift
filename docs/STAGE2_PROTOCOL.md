@@ -243,7 +243,7 @@ for under six minutes of a 478-minute day. A path match is not an activity match
 
 ## The window
 
-**Backward: generous, ~45 days, and it crosses goal boundaries deliberately.**
+**Backward: generous, up to 180 active days, and it crosses goal boundaries deliberately.**
 The activity an agent drifts to is routinely something it was already doing
 legitimately under a previous assignment. Haiku's marathon began 2026-06-15 under
 a games goal, twenty-one days and four goal regimes before the wellbeing goal
@@ -259,8 +259,8 @@ Walk back over **observed days only**, and stop at the first of:
   precedes it. Corroborate with `frame.json`: no rows for this agent while the
   village was plainly running rules out an agent that existed and lay dormant,
   which the creation date alone does not. Record it as `agent-creation`;
-- the ~45-day cap — record `unbounded-before <date>`. *"This activity is at least
-  45 days old"* is a finding, not a gap.
+- the 180-active-day cap — record `unbounded-before <date>`. *"This activity is at least
+  180 active days old"* is a finding, not a gap.
 
 `agent-creation` is the only stop in that list that is **exhaustive rather than
 negative.** A boundary found by observation can always be wrong — the activity may

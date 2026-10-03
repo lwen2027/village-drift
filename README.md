@@ -88,7 +88,7 @@ src/village_drift/
   shared/           ingestion, compression, evidence and rendering
   stage1/           agent-day construction, prompts and model runner
   handoff/          readiness, selection and window construction
-  stage2/           explain, backward walk, revision and validation
+  stage2/           explain, walk, revision, bounded resolution and validation
 evaluation/
   goldens/          frozen labels and golden-set tooling
   evidence/         rendered/raw evaluation inputs (gitignored)
@@ -194,6 +194,16 @@ to force a fresh judgement even when the fingerprint matches. Stage 2 and evalua
 commands require exact routing and descriptor tags; archived experiments are
 never selected implicitly.
 
+Incomplete Stage 2 records can then enter the checkpointed bounded resolver:
+
+```bash
+python3 -m village_drift.stage2.resolve --all --descriptor-tags B-full
+```
+
+It makes at most two evidence expansions per episode and one Opus 4.8 fallback
+for a refused or invalid response. Missing evidence and exhausted attempts stay
+explicitly unresolved for human review.
+
 Archived pre-overhaul run `B-peerfix`, 93 scorable rows of 100:
 
 ```
@@ -229,7 +239,7 @@ full in `ai-village-stage1-feature-spec.md`. In brief:
 ## Testing
 
 ```bash
-python3 tests/run.py               # no dependencies; 16 tests
+python3 tests/run.py               # no dependencies; full test suite
 python3 -m pytest tests/ -q        # same tests, if pytest is installed
 ```
 
@@ -273,7 +283,9 @@ precision, recall, F1 and accuracy do not measure the present prompts.
 token-bounded window and returns a LIST of drift episodes, because 14 of 20
 measured windows contain more than one activity. Three passes, the last two
 conditional: explain; a backward walk when an episode predates the readable
-window; then revision against the expanded evidence. Prompts are
+window; then revision against the expanded evidence. Persisted incomplete
+episodes may subsequently receive at most two identity-locked expansions and
+one Opus 4.8 fallback through the bounded resolver. Prompts are
 `src/village_drift/stage2/prompts/explain.md`,
 `src/village_drift/stage2/prompts/walk.md`, and
 `src/village_drift/stage2/prompts/revise.md`.
@@ -288,12 +300,10 @@ evaluations. See `docs/STAGE2_HANDOFF.md` for the measurement checklist.
 
 **Not yet done, in rough priority order:**
 
-- Stabilize the uncertain-negative expansion trigger. A structured
-  `history_request` now reuses the one bounded walk and revision, anchors the
-  walk on the named activity, and samples interior evidence days without
-  recursion. In repeated GPT-5.5-agent probes, however, the Claude Opus 5.5
-  judge requested expansion in only one of three runs. An unconditional sparse
-  fallback would also expand three true negatives in this golden set.
+- Measure the uncertain-negative trigger and bounded resolver on the frozen
+  evaluation set. A structured `history_request` anchors expansion on the
+  named activity, but its recall has not been measured under the current
+  prompts.
 - **The backward walk is useful but not solved.** On ten drift episodes it was
   exact on 5, within three days on 6, with median absolute error 2 days and
   maximum error 21 days. It cost $0.14. The mechanical predecessor scored AUC

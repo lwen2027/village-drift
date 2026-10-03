@@ -179,7 +179,8 @@ def test_revision_keeps_local_uncertainty_episode_scoped():
         in sent
     assert "retain that activity as an incomplete episode" in sent
     assert "repeat the incoming `history_request` unchanged" in sent
-    assert "the runner will not perform another walk" in sent
+    assert "at most two bounded, identity-locked expansions" in sent
+    assert "not permission to request arbitrary evidence" in sent
 
 
 def test_stage2_allows_supported_episodes_beside_one_history_request():
